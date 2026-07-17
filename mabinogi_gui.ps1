@@ -17,6 +17,18 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+# ----- 작업표시줄 아이콘/그룹 분리 -----
+# 이 창은 powershell.exe 안에서 뜨기 때문에 기본으로는 작업표시줄에서 PowerShell 아이콘으로
+# 묶입니다. 창을 만들기 전에 전용 AppUserModelID 를 부여하면 작업표시줄이 이 창을 독립 앱으로
+# 취급해 창 아이콘(꿀단지, $form.Icon)을 그대로 보여줍니다.
+try {
+  Add-Type -Namespace Win32 -Name TaskbarAppId -MemberDefinition @'
+[DllImport("shell32.dll", SetLastError = true)]
+public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
+'@
+  [Win32.TaskbarAppId]::SetCurrentProcessExplicitAppUserModelID('HoneyNogi.ControlPanel') | Out-Null
+} catch { }
+
 # ----- 중복 실행 방지 (워커와 동일한 방식의 전역 뮤텍스) -----
 # 컨트롤 패널이 여러 개 뜨면 [시작] 시 서로의 워커를 '기존 프로세스'로 종료시키고
 # 설정 저장도 서로 덮어쓰므로, 두 번째 인스턴스는 안내 후 스스로 종료합니다.
