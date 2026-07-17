@@ -3091,6 +3091,7 @@ function Return-ToAbyssSelection {
   $lastFocus = Get-Date
   $unknownSince = $null   # '알 수 없는 화면' 상태가 시작된 시각 (오클릭으로 열린 우편함 등 복구용)
   $xAttempts = 0          # 닫기(X) 후보 순환 인덱스
+  $stellaHandled = 0      # 복귀 중 스텔라 픽 처리 횟수 (무한 클릭 방지 상한용)
 
   while ((Get-Date) -lt $deadline) {
     # 0) 화면 캡처가 안 되는 동안은 판단이 불가능하므로 제한 시간을 멈추고 기다립니다.
@@ -3153,6 +3154,35 @@ function Return-ToAbyssSelection {
       if (Invoke-EventSkipOrConfirm -Game $Game -LogPrefix '복귀 중 ') {
         $unknownSince = $null
         continue
+      }
+
+      # 5-1) 오늘의 스텔라 픽(스텔라그램) 팝업이 복귀 중에 뜨면 바로 처리합니다.
+      #      기존에는 '알 수 없는 화면 20초 → X 닫기'로 느리게 넘겼고 X로 닫으면 오늘 픽을
+      #      고르지 못할 수 있었습니다 (실측 2026-07-18 06:00). Clear-EventOverlay 와 같은
+      #      방식: 1단계(카드 선택) → 2단계(확정 버튼). 상한(5회)을 넘으면 X 폴백에 맡깁니다.
+      if ($stellaHandled -lt 5) {
+        $stellaTitleNow = (Get-GameRegionOcrText -Game $Game -ReferenceX $rgStellaTitle[0] -ReferenceY $rgStellaTitle[1] `
+          -RegionWidth $rgStellaTitle[2] -RegionHeight $rgStellaTitle[3] -Scale 3 -Engine $ocrKoreanEngine) -replace '\s', ''
+        if ($stellaTitleNow.Contains('스텔라')) {
+          $stellaHandled++
+          Focus-Game -Game $Game
+          Click-GamePoint -Game $Game -ReferenceX $ptStellaCard[0] -ReferenceY $ptStellaCard[1]
+          Write-RunLog '[안내] 복귀 중 스텔라 픽 감지 - 가운데 카드 선택'
+          Start-Sleep -Seconds 2
+          $unknownSince = $null
+          continue
+        }
+        $stellaBtnNow = Find-GameTextPoint -Game $Game -ReferenceX $rgStellaPickBtn[0] -ReferenceY $rgStellaPickBtn[1] `
+          -RegionWidth $rgStellaPickBtn[2] -RegionHeight $rgStellaPickBtn[3] -SearchText '스텔라'
+        if ($stellaBtnNow) {
+          $stellaHandled++
+          Focus-Game -Game $Game
+          Click-ScreenPoint -X $stellaBtnNow.X -Y $stellaBtnNow.Y
+          Write-RunLog '[안내] 복귀 중 스텔라 픽 2단계 - 확정 버튼 클릭'
+          Start-Sleep -Seconds 2
+          $unknownSince = $null
+          continue
+        }
       }
 
       # 5.5) 알 수 없는 화면이 계속되면(오클릭으로 열린 우편함/전체 화면 UI 등 - 실측 2026-07-17)

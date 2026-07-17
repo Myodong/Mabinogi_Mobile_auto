@@ -1424,12 +1424,21 @@ function Start-NextCycle {
   $cycleNumber = $script:completedCycles + 1
   # 지난 세션(또는 직전 회차)의 로그 파일이 남아 있으면, 워커가 새로 쓰기 전에
   # GUI 타이머가 그 내용을 '새 로그'로 착각해 화면에 다시 출력합니다.
-  # 워커 시작 전에 파일을 지워 과거 로그가 다시 뜨지 않게 합니다.
+  # 워커 시작 전에 파일을 치워 과거 로그가 다시 뜨지 않게 하되, 그냥 지우지 않고
+  # run_시각.log 로 보관해 지난 회차 로그를 최근 20개까지 남깁니다 (오류 세트 보관 개수와 동일).
   try {
-    Remove-Item -LiteralPath $workerLog -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $workerLog) {
+      $archiveStamp = (Get-Item -LiteralPath $workerLog).LastWriteTime.ToString('yyyyMMdd_HHmmss')
+      $archivePath = Join-Path $scriptRoot ("Log\run_{0}.log" -f $archiveStamp)
+      Move-Item -LiteralPath $workerLog -Destination $archivePath -Force -ErrorAction Stop
+      # 보관 개수(20개) 초과분은 오래된 것부터 삭제
+      $oldRunLogs = @(Get-ChildItem -Path (Join-Path $scriptRoot 'Log') -Filter 'run_*.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 20)
+      foreach ($oldLog in $oldRunLogs) { Remove-Item -LiteralPath $oldLog.FullName -Force -ErrorAction SilentlyContinue }
+    }
     $script:logSeen = 0
   } catch {
-    # 파일이 잠겨 있는 등 삭제가 안 되면, 현재 줄 수까지를 '이미 본 것'으로 처리합니다.
+    # 파일이 잠겨 있는 등 이동이 안 되면, 현재 줄 수까지를 '이미 본 것'으로 처리합니다.
     # (워커가 파일을 새로 쓰면 줄 수가 줄어들어 타이머의 리셋 로직이 처음부터 다시 읽습니다)
     $existing = Read-LogLines $workerLog
     $script:logSeen = if ($null -ne $existing) { $existing.Count } else { 0 }
