@@ -1,10 +1,10 @@
-# 마비노기 모바일 파밍 자동화 (MabinogiAuto)
+# 🍯 꿀비노기 (HoneyNogi) — 꿀빨면서 마비노기 하자
 
 > 어비스 / 던전 / 사냥터 3개 콘텐츠 지원
 
 게임 화면을 OCR(글자 인식)로 읽어 어비스/던전/사냥터를 자동으로 **입장 → 클리어 대기 → 보상 수령 → 재입장 반복**하는 자동화 도구입니다.
 
-### 📥 [최신 버전 다운로드](https://github.com/Myodong/Mabinogi_Mobile_auto/releases/latest)
+### 📥 [최신 버전 다운로드](https://github.com/Myodong/HoneyNogi/releases/latest)
 
 ---
 
@@ -19,7 +19,7 @@
    | 던전 | 원하는 던전의 구역 선택 화면 |
    | 사냥터 | 원하는 사냥터의 첫 화면 |
 
-3. `MabinogiAuto.exe` 더블클릭 → 관리자 권한(UAC) "예"
+3. `HoneyNogi.exe` 더블클릭 → 관리자 권한(UAC) "예"
 4. 컨트롤 패널에서 콘텐츠 선택 + 상세 설정 + 반복 방식(무한/횟수/시간) 지정
 5. **[시작]** 클릭
 
@@ -41,13 +41,13 @@
 
 | 파일 | 설명 |
 |---|---|
-| `MabinogiAuto.exe` | **시작점.** 더블클릭으로 실행. 단일 파일이라 다른 PC엔 이것만 복사하면 됨 |
+| `HoneyNogi.exe` | **시작점.** 더블클릭으로 실행. 단일 파일이라 다른 PC엔 이것만 복사하면 됨 |
 | `mabinogi_gui.ps1` | 컨트롤 패널 원본 (exe에 내장됨) |
 | `mabinogi_run_once.ps1` | 1회차 실행 본체 — 클릭·OCR·키 입력 (exe에 내장됨) |
 | `config.json` | 설정 파일 (좌표·대기시간·키 등, 한국어 설명 포함) |
 | `rdp_redirect_console.ps1` | RDP 자동 전환 내부 스크립트 |
 
-- exe는 실행 시 스크립트를 `%LOCALAPPDATA%\MabinogiAuto`로 추출해 실행합니다.
+- exe는 실행 시 스크립트를 `%LOCALAPPDATA%\HoneyNogi`로 추출해 실행합니다. (구버전 `MabinogiAuto` 폴더의 설정은 최초 실행 때 자동으로 이어받습니다)
 - exe 업데이트 시 좌표/구조는 자동 최신화되고 사용자 설정은 유지됩니다.
 
 ---

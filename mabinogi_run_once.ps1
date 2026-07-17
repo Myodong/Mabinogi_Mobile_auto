@@ -406,7 +406,7 @@ if (-not $isAdministrator) {
 
 # 중복 실행 방지: 이미 다른 자동화 인스턴스가 돌고 있으면 이 인스턴스는 바로 종료합니다.
 # (컨트롤러 없이 떠도는 워커가 게임을 계속 조작하는 사고를 막습니다)
-$script:instanceMutex = New-Object System.Threading.Mutex($false, 'Global\MabinogiMobileAutomationRunOnce')
+$script:instanceMutex = New-Object System.Threading.Mutex($false, 'Global\HoneyNogiRunOnce')
 if (-not $script:instanceMutex.WaitOne(0)) {
   Write-RunLog '[중단] 이미 다른 자동화 인스턴스가 실행 중이라 이 실행을 취소합니다.'
   Write-Host '이미 다른 자동화가 실행 중입니다. 3초 후 이 창을 닫습니다.' -ForegroundColor Red
@@ -422,8 +422,8 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Milliseconds 50
   }
 }
-$Host.UI.RawUI.WindowTitle = '마비노기 모바일 자동화'
-Write-Host '마비노기 모바일 자동화를 시작합니다.' -ForegroundColor Cyan
+$Host.UI.RawUI.WindowTitle = '꿀비노기'
+Write-Host '꿀비노기(마비노기 모바일 자동화)를 시작합니다.' -ForegroundColor Cyan
 Write-Host '진행 상황은 이 창과 mabinogi_run_once.log에 기록됩니다.' -ForegroundColor DarkGray
 
 Add-Type -AssemblyName System.Drawing
@@ -552,7 +552,7 @@ if (-not $ocrEnglishEngine) {
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-public static class MabinogiOneClickInput {
+public static class HoneyNogiInput {
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT { public int Left, Top, Right, Bottom; }
 
@@ -629,23 +629,23 @@ public static class MabinogiOneClickInput {
 # 본체 모니터 100%로 전환) 좌표계가 어긋나지 않습니다. 실패 시 구형 방식으로 폴백합니다.
 $dpiContextSet = $false
 try {
-  $dpiContextSet = [MabinogiOneClickInput]::SetProcessDpiAwarenessContext([IntPtr](-4))
+  $dpiContextSet = [HoneyNogiInput]::SetProcessDpiAwarenessContext([IntPtr](-4))
 } catch { }
 if (-not $dpiContextSet) {
   try {
-    $threadContext = [MabinogiOneClickInput]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    $threadContext = [HoneyNogiInput]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $dpiContextSet = ($threadContext -ne [IntPtr]::Zero)
   } catch { }
 }
 if (-not $dpiContextSet) {
-  [MabinogiOneClickInput]::SetProcessDPIAware() | Out-Null
+  [HoneyNogiInput]::SetProcessDPIAware() | Out-Null
 }
 
 # 화면 꺼짐/시스템 절전 방지: 감지가 화면 렌더링에 의존하므로, 자동화가 도는 동안
 # 디스플레이가 꺼지지 않게 유지합니다. (원격 도구 접속을 끊은 뒤 유휴 시간으로
 # 화면이 꺼지면서 캡처가 실패하는 것을 예방. 프로세스 종료 시 자동 해제됨)
 # 2147483651 = 0x80000003 = ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
-[MabinogiOneClickInput]::SetThreadExecutionState([uint32]2147483651) | Out-Null
+[HoneyNogiInput]::SetThreadExecutionState([uint32]2147483651) | Out-Null
 
 function Get-GameProcess {
   # 프로세스가 아예 없으면 Get-Process가 먼저 예외를 던져 아래 한국어 안내가 묻히므로,
@@ -662,12 +662,12 @@ function Get-GameProcess {
 
 function Get-UserIdleSeconds {
   # 사용자의 마지막 키보드/마우스 입력 이후 경과 시간(초)을 반환합니다.
-  $info = New-Object MabinogiOneClickInput+LASTINPUTINFO
+  $info = New-Object HoneyNogiInput+LASTINPUTINFO
   $info.cbSize = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($info)
-  if (-not [MabinogiOneClickInput]::GetLastInputInfo([ref]$info)) {
+  if (-not [HoneyNogiInput]::GetLastInputInfo([ref]$info)) {
     return [double]::MaxValue
   }
-  $elapsedMs = [MabinogiOneClickInput]::GetTickCount() - $info.dwTime
+  $elapsedMs = [HoneyNogiInput]::GetTickCount() - $info.dwTime
   return [double]$elapsedMs / 1000.0
 }
 
@@ -678,10 +678,10 @@ function Test-GameCovered {
   # 창 내부의 주요 지점(중앙, HUD 영역, 하단 문구 영역 등)에 어떤 창이 떠 있는지
   # WindowFromPoint 로 조사해서, 하나라도 게임이 아니면 "가려짐"으로 판단합니다.
   $gameHandle = $Game.MainWindowHandle
-  if ([MabinogiOneClickInput]::IsIconic($gameHandle)) { return $true }
+  if ([HoneyNogiInput]::IsIconic($gameHandle)) { return $true }
 
-  $rect = New-Object MabinogiOneClickInput+RECT
-  if (-not [MabinogiOneClickInput]::GetWindowRect($gameHandle, [ref]$rect)) { return $false }
+  $rect = New-Object HoneyNogiInput+RECT
+  if (-not [HoneyNogiInput]::GetWindowRect($gameHandle, [ref]$rect)) { return $false }
   $width = $rect.Right - $rect.Left
   $height = $rect.Bottom - $rect.Top
   if ($width -le 0 -or $height -le 0) { return $false }
@@ -691,12 +691,12 @@ function Test-GameCovered {
     @(0.50, 0.50), @(0.78, 0.12), @(0.50, 0.85), @(0.25, 0.50)
   )
   foreach ($probe in $probes) {
-    $point = New-Object MabinogiOneClickInput+POINT
+    $point = New-Object HoneyNogiInput+POINT
     $point.X = $rect.Left + [int]($width * $probe[0])
     $point.Y = $rect.Top + [int]($height * $probe[1])
-    $hitWindow = [MabinogiOneClickInput]::WindowFromPoint($point)
+    $hitWindow = [HoneyNogiInput]::WindowFromPoint($point)
     if ($hitWindow -eq [IntPtr]::Zero) { return $true }
-    $rootWindow = [MabinogiOneClickInput]::GetAncestor($hitWindow, 2)  # GA_ROOT
+    $rootWindow = [HoneyNogiInput]::GetAncestor($hitWindow, 2)  # GA_ROOT
     if ($rootWindow -ne $gameHandle) { return $true }
   }
   return $false
@@ -722,12 +722,12 @@ function Invoke-AutoRefocus {
 function Focus-Game {
   param([System.Diagnostics.Process]$Game)
 
-  [MabinogiOneClickInput]::ShowWindowAsync($Game.MainWindowHandle, 9) | Out-Null
-  [MabinogiOneClickInput]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+  [HoneyNogiInput]::ShowWindowAsync($Game.MainWindowHandle, 9) | Out-Null
+  [HoneyNogiInput]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 80
-  [MabinogiOneClickInput]::SetForegroundWindow($Game.MainWindowHandle) | Out-Null
+  [HoneyNogiInput]::SetForegroundWindow($Game.MainWindowHandle) | Out-Null
   Start-Sleep -Milliseconds 80
-  [MabinogiOneClickInput]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+  [HoneyNogiInput]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 700
 }
 
@@ -738,8 +738,8 @@ function Get-ScaledScreenPoint {
     [int]$ReferenceY
   )
 
-  $rect = New-Object MabinogiOneClickInput+RECT
-  if (-not [MabinogiOneClickInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) {
+  $rect = New-Object HoneyNogiInput+RECT
+  if (-not [HoneyNogiInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) {
     throw '게임 창 좌표를 읽지 못했습니다.'
   }
 
@@ -758,11 +758,11 @@ function Get-ScaledScreenPoint {
 function Click-ScreenPoint {
   param([int]$X, [int]$Y)
 
-  [MabinogiOneClickInput]::SetCursorPos($X, $Y) | Out-Null
+  [HoneyNogiInput]::SetCursorPos($X, $Y) | Out-Null
   Start-Sleep -Milliseconds 250
-  [MabinogiOneClickInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+  [HoneyNogiInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 100
-  [MabinogiOneClickInput]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+  [HoneyNogiInput]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 }
 
 function Click-GamePoint {
@@ -839,14 +839,14 @@ function Get-SessionConnectState {
   $bytes = 0
   try {
     # -1 = WTS_CURRENT_SESSION(현재 세션), 8 = WTSConnectState
-    if ([MabinogiOneClickInput]::WTSQuerySessionInformation([IntPtr]::Zero, -1, 8, [ref]$buffer, [ref]$bytes)) {
+    if ([HoneyNogiInput]::WTSQuerySessionInformation([IntPtr]::Zero, -1, 8, [ref]$buffer, [ref]$bytes)) {
       return [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer)
     }
     return -1
   } catch {
     return -1
   } finally {
-    if ($buffer -ne [IntPtr]::Zero) { [MabinogiOneClickInput]::WTSFreeMemory($buffer) }
+    if ($buffer -ne [IntPtr]::Zero) { [HoneyNogiInput]::WTSFreeMemory($buffer) }
   }
 }
 
@@ -856,14 +856,14 @@ function Get-SessionStationName {
   $bytes = 0
   try {
     # -1 = WTS_CURRENT_SESSION(현재 세션), 6 = WTSWinStationName
-    if ([MabinogiOneClickInput]::WTSQuerySessionInformation([IntPtr]::Zero, -1, 6, [ref]$buffer, [ref]$bytes)) {
+    if ([HoneyNogiInput]::WTSQuerySessionInformation([IntPtr]::Zero, -1, 6, [ref]$buffer, [ref]$bytes)) {
       return [System.Runtime.InteropServices.Marshal]::PtrToStringUni($buffer)
     }
     return $null
   } catch {
     return $null
   } finally {
-    if ($buffer -ne [IntPtr]::Zero) { [MabinogiOneClickInput]::WTSFreeMemory($buffer) }
+    if ($buffer -ne [IntPtr]::Zero) { [HoneyNogiInput]::WTSFreeMemory($buffer) }
   }
 }
 
@@ -878,7 +878,7 @@ function Get-CaptureFailInfo {
     }
   }
   # 4096 = SM_REMOTESESSION: 0이 아니면 현재 RDP 세션에서 실행 중
-  if ([MabinogiOneClickInput]::GetSystemMetrics(4096) -ne 0) {
+  if ([HoneyNogiInput]::GetSystemMetrics(4096) -ne 0) {
     # 재접속이 빠르면 '끊김' 상태가 감지 주기 사이에 지나가 관측되지 않습니다.
     # 이때는 연결 이름 변화로 구분합니다: 최소화는 연결이 유지되어 이름이 그대로이고,
     # 재접속은 새 연결이라 이름이 바뀝니다(예: console → rdp-tcp#4).
@@ -905,7 +905,7 @@ function Get-CaptureRecoveryMessage {
   # (예: RDP 종료 후 복구 = 본체 화면 전환 완료 / 최소화 후 복구 = RDP 창 다시 열림)
   param([string]$FailCause)
 
-  $isRemoteNow = ([MabinogiOneClickInput]::GetSystemMetrics(4096) -ne 0)
+  $isRemoteNow = ([HoneyNogiInput]::GetSystemMetrics(4096) -ne 0)
   switch ($FailCause) {
     'disconnected' {
       if ($isRemoteNow) {
@@ -934,8 +934,8 @@ function Test-DesktopRenderingAlive {
   # 게임의 OCR 영역이 전부 검을 때(던전 로딩 화면 등 '진짜 검은 장면'), 렌더링 중단
   # (RDP 최소화)과 구분하는 용도입니다. 로딩 화면이어도 작업표시줄/다른 창 등
   # 화면 어딘가에는 색이 있으므로, 표본에 색이 하나라도 있으면 렌더링은 정상입니다.
-  $w = [MabinogiOneClickInput]::GetSystemMetrics(0)   # SM_CXSCREEN
-  $h = [MabinogiOneClickInput]::GetSystemMetrics(1)   # SM_CYSCREEN
+  $w = [HoneyNogiInput]::GetSystemMetrics(0)   # SM_CXSCREEN
+  $h = [HoneyNogiInput]::GetSystemMetrics(1)   # SM_CYSCREEN
   if ($w -le 0 -or $h -le 0) { return $false }
   $bmp = New-Object System.Drawing.Bitmap 1, 1
   $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -1066,8 +1066,8 @@ function Get-GameRegionOcrText {
     [switch]$BinaryWhiteText
   )
 
-  $rect = New-Object MabinogiOneClickInput+RECT
-  if (-not [MabinogiOneClickInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) {
+  $rect = New-Object HoneyNogiInput+RECT
+  if (-not [HoneyNogiInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) {
     throw 'OCR용 게임 창 좌표를 읽지 못했습니다.'
   }
 
@@ -1163,8 +1163,8 @@ function Find-GameTextPoint {
   # ExactText 를 주면 '단어 전체가 정확히 일치'하는 것을 먼저 찾고, 없을 때만 SearchText
   # 부분 일치로 넘어갑니다. (예: '지옥1'과 '지옥10'처럼 이름이 겹치는 버튼 구분용)
   # 글자를 못 찾거나 캡처에 실패하면 $null 을 돌려줍니다.
-  $rect = New-Object MabinogiOneClickInput+RECT
-  if (-not [MabinogiOneClickInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) {
+  $rect = New-Object HoneyNogiInput+RECT
+  if (-not [HoneyNogiInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) {
     return $null
   }
   $width = $rect.Right - $rect.Left
@@ -1923,8 +1923,8 @@ function Resolve-DgEnterConfirmPopup {
     -RegionWidth $rgDgWeekPopup[2] -RegionHeight $rgDgWeekPopup[3] -Scale 4 -SearchText '일주일'
   if (-not $weekPoint) { return $false }
   # 체크박스는 '일주일' 글자 바로 왼쪽에 있습니다 (기준 좌표로 40px, 창 크기에 맞춰 환산)
-  $rectWeek = New-Object MabinogiOneClickInput+RECT
-  [MabinogiOneClickInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rectWeek) | Out-Null
+  $rectWeek = New-Object HoneyNogiInput+RECT
+  [HoneyNogiInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rectWeek) | Out-Null
   $checkOffset = [int][Math]::Round(40 * ($rectWeek.Right - $rectWeek.Left) / $referenceWidth)
   Focus-Game -Game $Game
   Click-ScreenPoint -X ($weekPoint.X - $checkOffset) -Y $weekPoint.Y
@@ -2187,8 +2187,8 @@ function Test-DifficultySelectedAt {
   # (dy≈±16)을 좁은 폭(dx≈±12)으로 표본 조사해, '밝고 채도 높은' 픽셀이 3개 이상이면 선택.
   #  - 흰 글자(채도 낮음)·어두운 비선택 배경은 안 걸림
   #  - dx 를 좁게 잡아 옆 알약 테두리 침범을 방지 (실측: 어려움 선택 시 6/18, 비선택은 0/18)
-  $rect = New-Object MabinogiOneClickInput+RECT
-  if (-not [MabinogiOneClickInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) { return $false }
+  $rect = New-Object HoneyNogiInput+RECT
+  if (-not [HoneyNogiInput]::GetWindowRect($Game.MainWindowHandle, [ref]$rect)) { return $false }
   $width = $rect.Right - $rect.Left
   $height = $rect.Bottom - $rect.Top
   if ($width -le 0 -or $height -le 0) { return $false }
@@ -3199,9 +3199,9 @@ function Get-KeyDisplayName {
 function Press-KeyOnce {
   param([byte]$VirtualKey)
 
-  [MabinogiOneClickInput]::keybd_event($VirtualKey, 0, 0, [UIntPtr]::Zero)
+  [HoneyNogiInput]::keybd_event($VirtualKey, 0, 0, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 120
-  [MabinogiOneClickInput]::keybd_event($VirtualKey, 0, 2, [UIntPtr]::Zero)
+  [HoneyNogiInput]::keybd_event($VirtualKey, 0, 2, [UIntPtr]::Zero)
 }
 
 try {
@@ -3216,8 +3216,8 @@ try {
   #  - fixed 모드        : config 의 x, y, width, height 로 항상 고정.
   # (게임이 "창 모드"일 때만 동작합니다)
   if ($windowNormalize) {
-    $normalizeRect = New-Object MabinogiOneClickInput+RECT
-    if ([MabinogiOneClickInput]::GetWindowRect($game.MainWindowHandle, [ref]$normalizeRect)) {
+    $normalizeRect = New-Object HoneyNogiInput+RECT
+    if ([HoneyNogiInput]::GetWindowRect($game.MainWindowHandle, [ref]$normalizeRect)) {
       $currentWidth = $normalizeRect.Right - $normalizeRect.Left
       $currentHeight = $normalizeRect.Bottom - $normalizeRect.Top
       $currentX = $normalizeRect.Left
@@ -3225,8 +3225,8 @@ try {
       # 작업 영역(작업표시줄 제외) 기준으로 배치합니다. 창이 작업표시줄과 겹치면
       # 하단 OCR 영역(클리어 문구/입장·나가기 버튼)이 게임 대신 작업표시줄을 읽고,
       # 하단 클릭도 작업표시줄에 먹히기 때문입니다.
-      $workArea = New-Object MabinogiOneClickInput+RECT
-      if ([MabinogiOneClickInput]::SystemParametersInfo(0x0030, 0, [ref]$workArea, 0)) {
+      $workArea = New-Object HoneyNogiInput+RECT
+      if ([HoneyNogiInput]::SystemParametersInfo(0x0030, 0, [ref]$workArea, 0)) {
         $workX = $workArea.Left
         $workY = $workArea.Top
         $workW = $workArea.Right - $workArea.Left
@@ -3234,8 +3234,8 @@ try {
       } else {
         $workX = 0
         $workY = 0
-        $workW = [MabinogiOneClickInput]::GetSystemMetrics(0)
-        $workH = [MabinogiOneClickInput]::GetSystemMetrics(1)
+        $workW = [HoneyNogiInput]::GetSystemMetrics(0)
+        $workH = [HoneyNogiInput]::GetSystemMetrics(1)
       }
 
       if ($windowMode -eq 'fixed') {
@@ -3282,7 +3282,7 @@ try {
 
       $positionOk = ($currentX -eq $targetX -and $currentY -eq $targetY)
       if (-not ($sizeOk -and $positionOk)) {
-        [MabinogiOneClickInput]::MoveWindow($game.MainWindowHandle, $targetX, $targetY, $targetWidth, $targetHeight, $true) | Out-Null
+        [HoneyNogiInput]::MoveWindow($game.MainWindowHandle, $targetX, $targetY, $targetWidth, $targetHeight, $true) | Out-Null
         Start-Sleep -Milliseconds 800
         Write-RunLog "[준비] 게임 창 정렬($windowMode): ${currentWidth}x${currentHeight}@($currentX,$currentY) -> ${targetWidth}x${targetHeight}@($targetX,$targetY)"
       }
@@ -3704,8 +3704,8 @@ try {
   $diagStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
   try {
     if ($game) {
-      $diagRect = New-Object MabinogiOneClickInput+RECT
-      if ([MabinogiOneClickInput]::GetWindowRect($game.MainWindowHandle, [ref]$diagRect)) {
+      $diagRect = New-Object HoneyNogiInput+RECT
+      if ([HoneyNogiInput]::GetWindowRect($game.MainWindowHandle, [ref]$diagRect)) {
         $diagW = $diagRect.Right - $diagRect.Left
         $diagH = $diagRect.Bottom - $diagRect.Top
         Write-RunLog "[진단] 게임 창: ${diagW}x${diagH} @ L$($diagRect.Left),T$($diagRect.Top)"
