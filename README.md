@@ -1,5 +1,4 @@
-# 마비노기 모바
-일 파밍 자동화 (MabinogiAuto)
+# 마비노기 모바일 파밍 자동화 (MabinogiAuto)
 
 > 어비스 / 던전 / 사냥터 3개 콘텐츠 지원
 
@@ -105,6 +104,27 @@
 | RDP 닫기/끊기 | 자동으로 본체 화면 전환 → 계속 작동 |
 
 > **RDP 최소화 대신 창을 닫을 것** — 최소화 상태에서는 화면 캡처가 되지 않아 일시정지됩니다.
+
+### RDP를 "최소화"해도 계속 돌리기 (선택)
+
+기본적으로 RDP는 창을 최소화하면 원격 화면 렌더링을 멈춰 자동화가 일시정지됩니다.
+아래 설정을 하면 **최소화 상태에서도 화면이 살아 있어 자동화가 계속** 돕니다.
+
+**적용** — 접속하는 쪽 PC(클라이언트, RDP 창을 띄우는 컴퓨터)의 관리자 PowerShell에서 실행:
+
+```powershell
+New-ItemProperty -Path 'HKCU:\Software\Microsoft\Terminal Server Client' -Name 'RemoteDesktop_SuppressWhenMinimized' -Value 2 -PropertyType DWord -Force
+```
+
+**되돌리기** — 같은 PC에서 실행:
+
+```powershell
+Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Terminal Server Client' -Name 'RemoteDesktop_SuppressWhenMinimized'
+```
+
+- 게임이 돌아가는 PC가 아니라 **접속하는 PC 쪽** 설정입니다. 접속하는 PC가 여러 대면 각각 실행하세요.
+- 이미 열려 있는 세션에는 적용되지 않으니 **RDP를 끊었다가 다시 접속**해야 효력이 생깁니다.
+- 이 설정을 해도 RDP 창을 완전히 닫으면 기존처럼 본체 화면 자동 전환이 이어받습니다.
 
 ---
 
