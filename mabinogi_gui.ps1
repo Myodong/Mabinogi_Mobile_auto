@@ -144,7 +144,7 @@ $script:esRelease   = [uint32]2147483648   # 0x80000000 (ES_CONTINUOUS only)
 # 앱 버전 (단일 관리 지점): 여기만 올리면 GUI 제목·로그·exe 파일 속성(빌드 시 자동 추출)에
 # 모두 반영됩니다. 파일명은 HoneyNogi.exe 로 고정 - 업데이트는 늘 '덮어쓰기 한 번'.
 # ※ 좌표 버전(coordsVersion)과는 별개입니다 (그쪽은 화면 좌표 변경 시에만 올림)
-$appVersion = '1.0.4'
+$appVersion = '1.0.5'
 
 $scriptRoot = $PSScriptRoot
 $configPath = Join-Path $scriptRoot 'config.json'

@@ -123,6 +123,8 @@ $rgHomeEndEsc  = @(Get-ConfigValue $config @('ocrRegions', 'homeEndEsc') @(875, 
 $rgAbyssMenu   = @(Get-ConfigValue $config @('ocrRegions', 'abyssMenu') @(850, 330, 350, 85))   # 2026-07-16 UI 개편: '필드 보스/어비스/망령의 탑/레이드' 줄 (OCR 실측)
 $rgAbyssCards  = @(Get-ConfigValue $config @('ocrRegions', 'abyssCards') @(690, 110, 280, 310)) # 어비스 선택 화면 우측 던전 배너 3장의 제목 영역 (2026-07-16 개편 화면 실측)
 $rgMenuExitLabel = @(Get-ConfigValue $config @('ocrRegions', 'menuExitLabel') @(1160, 600, 112, 90)) # ESC 메뉴 우하단 '게임 종료' 문구 (메뉴 열림 2차 신호, 두 창 크기 실측)
+$rgNoticeTabs    = @(170, 495, 930, 62)   # 공지 게시판 팝업 하단 탭 줄(공지사항/이벤트/쿠폰 입력/FAQ) - 2026-07-19 hyodong 캡처 실측
+$ptNoticeClose   = @(1092, 135)           # 공지 게시판 팝업 우상단 X - 같은 캡처 실측 (공용 X 후보 1090,137과 동일 계열)
 $rgAbyssSelect = @(Get-ConfigValue $config @('ocrRegions', 'abyssSelectionTitle') @(0, 25, 240, 95))
 $rgDetailTitle = @(Get-ConfigValue $config @('ocrRegions', 'detailTitle') @(30, 100, 350, 65))
 $ptDetailBack  = @(Get-ConfigValue $config @('clickPoints', 'detailBack') @(43, 67))
@@ -1753,6 +1755,21 @@ function Test-DungeonClearPrompt {
   if ($normalized.Contains('화면을') -and $normalized.Contains('터')) { return $true }
   if ($normalized.Contains('화면을') -and $normalized.Contains('주세요')) { return $true }
   return ($normalized.Contains('터치해') -or $normalized.Contains('터치하'))
+}
+
+function Test-NoticeBoardPopup {
+  param([System.Diagnostics.Process]$Game)
+
+  # 공지 게시판 팝업(하단 탭: 공지사항/이벤트/쿠폰 입력/FAQ)을 감지합니다.
+  # 아침 6시 리셋 뒤 이 팝업이 화면을 덮은 채 남으면, 가장자리로 필드 HUD가 그대로
+  # 보여 '필드 상태'로 오판되고 ESC 클릭이 팝업에 막혀 무한 반복됩니다
+  # (2026-07-19 06:42 hyodong 실측: ESC 클릭 18회 후 시간 초과).
+  # 탭 줄 글자가 크고 또렷해 판독이 안정적입니다 ('공지사항'/'이벤트'/'쿠폰'/'FAQ').
+  $text = (Get-GameRegionOcrText -Game $Game -ReferenceX $rgNoticeTabs[0] -ReferenceY $rgNoticeTabs[1] `
+    -RegionWidth $rgNoticeTabs[2] -RegionHeight $rgNoticeTabs[3] -Scale 3 -Engine $ocrKoreanEngine) -replace '\s', ''
+  if (-not $text) { return $false }
+  if ($text.Contains('쿠폰')) { return $true }
+  return ($text.Contains('공지') -and $text.Contains('이벤트'))
 }
 
 function Test-ExitButton {
@@ -3488,6 +3505,16 @@ function Return-ToAbyssSelection {
         Remove-Item -LiteralPath $safeStopFlagPath -Force -ErrorAction SilentlyContinue
         Write-RunLog '[완료] 안전 중지 예약 확인 - 던전 밖(HUD) 확인 시점에서 회차를 마칩니다'
         exit 0
+      }
+      # 공지 게시판 팝업이 화면을 덮고 있으면(HUD는 가장자리로 계속 보임) ESC 클릭이
+      # 팝업에 막혀 헛돌기만 합니다 - 먼저 팝업 우상단 X를 눌러 닫습니다
+      # (2026-07-19 06:42 hyodong 실측: 6시 리셋 후 이 팝업으로 ESC 18회 헛클릭 → 시간 초과)
+      if (Test-NoticeBoardPopup -Game $Game) {
+        Focus-Game -Game $Game
+        Click-GamePoint -Game $Game -ReferenceX $ptNoticeClose[0] -ReferenceY $ptNoticeClose[1]
+        Write-RunLog '[어비스] 공지 게시판 팝업 감지 - X로 닫기'
+        Start-Sleep -Seconds 2
+        continue
       }
       Focus-Game -Game $Game
       Click-GamePoint -Game $Game -ReferenceX $ptEscButton[0] -ReferenceY $ptEscButton[1]
