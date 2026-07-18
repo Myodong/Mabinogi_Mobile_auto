@@ -144,7 +144,7 @@ $script:esRelease   = [uint32]2147483648   # 0x80000000 (ES_CONTINUOUS only)
 # 앱 버전 (단일 관리 지점): 여기만 올리면 GUI 제목·로그·exe 파일 속성(빌드 시 자동 추출)에
 # 모두 반영됩니다. 파일명은 HoneyNogi.exe 로 고정 - 업데이트는 늘 '덮어쓰기 한 번'.
 # ※ 좌표 버전(coordsVersion)과는 별개입니다 (그쪽은 화면 좌표 변경 시에만 올림)
-$appVersion = '1.0.2'
+$appVersion = '1.0.3'
 
 $scriptRoot = $PSScriptRoot
 $configPath = Join-Path $scriptRoot 'config.json'
@@ -1436,15 +1436,17 @@ function Start-NextCycle {
   # 지난 세션(또는 직전 회차)의 로그 파일이 남아 있으면, 워커가 새로 쓰기 전에
   # GUI 타이머가 그 내용을 '새 로그'로 착각해 화면에 다시 출력합니다.
   # 워커 시작 전에 파일을 치워 과거 로그가 다시 뜨지 않게 하되, 그냥 지우지 않고
-  # run_시각.log 로 보관해 지난 회차 로그를 최근 20개까지 남깁니다 (오류 세트 보관 개수와 동일).
+  # run_시각.log 로 보관해 지난 회차 로그를 최근 10개까지 남깁니다 (오류 세트 보관 개수와 동일).
+  # 시각은 읽기 쉽게 h/m/s 표기를 씁니다 (예: run_20260718_h21m49s09.log).
   try {
     if (Test-Path -LiteralPath $workerLog) {
-      $archiveStamp = (Get-Item -LiteralPath $workerLog).LastWriteTime.ToString('yyyyMMdd_HHmmss')
+      $archiveStamp = (Get-Item -LiteralPath $workerLog).LastWriteTime.ToString('yyyyMMdd_\hHH\mmm\sss')
       $archivePath = Join-Path $scriptRoot ("Log\run_{0}.log" -f $archiveStamp)
       Move-Item -LiteralPath $workerLog -Destination $archivePath -Force -ErrorAction Stop
-      # 보관 개수(20개) 초과분은 오래된 것부터 삭제
+      # 보관 개수(10개) 초과분은 오래된 것부터 삭제 (정리는 파일명이 아니라 수정 시각 기준이라
+      # 옛 형식(run_20260718_214909.log) 파일이 섞여 있어도 함께 정리됩니다)
       $oldRunLogs = @(Get-ChildItem -Path (Join-Path $scriptRoot 'Log') -Filter 'run_*.log' -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -Skip 20)
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 10)
       foreach ($oldLog in $oldRunLogs) { Remove-Item -LiteralPath $oldLog.FullName -Force -ErrorAction SilentlyContinue }
     }
     $script:logSeen = 0
@@ -1455,6 +1457,13 @@ function Start-NextCycle {
     $script:logSeen = if ($null -ne $existing) { $existing.Count } else { 0 }
   }
   $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $workerScript + '"'))
+  # 반복 모드는 config에 저장되지 않는 GUI 상태라 환경변수로 워커에 전달합니다.
+  # 워커가 이 값을 로그 파일의 [설정] 스냅샷(화면 미표시)에 함께 기록합니다.
+  $env:HONEYNOGI_REPEAT_INFO = if ($null -ne $script:targetTime) {
+    "시간 지정(~$($script:targetTime.ToString('MM-dd HH:mm')))"
+  } elseif ($script:targetCycles -gt 0) {
+    "횟수 지정(${cycleNumber}/$($script:targetCycles)회차)"
+  } else { '무한 반복' }
   $script:worker = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList $arguments -PassThru
   $statusSuffix = ''
   if ($null -ne $script:targetTime) { $statusSuffix = " ($($script:targetTime.ToString('HH:mm')) 까지)" }
@@ -1493,6 +1502,8 @@ $timer.Add_Tick({
       if ($null -ne $lines) {
         if ($lines.Count -lt $script:logSeen) { $script:logSeen = 0 }
         for ($i = $script:logSeen; $i -lt $lines.Count; $i++) {
+          # [설정] 줄은 로그 파일 전용(적용 설정 스냅샷 - 오류 세트 분석용)이라 화면에는 표시하지 않습니다
+          if ($lines[$i] -match '\[설정\]') { continue }
           Add-ColoredLogLine ('  ' + $lines[$i])
         }
         $script:logSeen = $lines.Count

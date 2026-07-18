@@ -549,6 +549,6 @@
   "diagnostics": {
     "_설명": "오류 진단 관련 설정입니다.",
     "_keepScreenshots": "오류 시 저장하는 진단 세트(error_시각.png 스크린샷 + error_시각.log 로그 사본)를 각각 최근 몇 개까지 보관할지. 초과분은 오래된 것부터 자동 삭제. 0 = 자동 삭제 안 함",
-    "keepScreenshots": 20
+    "keepScreenshots": 10
   }
 }

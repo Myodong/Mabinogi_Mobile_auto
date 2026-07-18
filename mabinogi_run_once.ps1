@@ -1469,10 +1469,13 @@ function Wait-ForDungeonClearScreen {
   param(
     [System.Diagnostics.Process]$Game,
     [int]$TimeoutSeconds = 300,
-    [switch]$DungeonMode
+    [switch]$DungeonMode,
+    [scriptblock]$FindResultButton
   )
   # DungeonMode: 던전/사냥터용. 어비스 전용 검사(나가기/어비스 선택 화면)를 건너뛰고
   # 폴링 간격을 1초로 줄여 클리어 화면을 더 빨리 감지합니다.
+  # FindResultButton: 콘텐츠별 결과 화면 버튼 탐색(던전='다시 하기'/사냥터='새 임무 선택').
+  # 사용자가 클리어 화면을 직접 터치해 이미 결과 화면으로 넘어간 경우를 잡습니다.
 
   # 반환값: 'clear' = 클리어 화면 감지 / 'reward' = 이미 보상 화면(사용자가 직접 터치해 넘긴 경우)
   #         'selection' = 이미 어비스 선택 화면(사용자가 끝까지 직접 진행한 경우)
@@ -1495,6 +1498,16 @@ function Wait-ForDungeonClearScreen {
     if (Test-DungeonClearPrompt -Game $Game) {
       Write-RunLog "$($script:contentTag) 클리어 문구(화면을 터치) 감지"
       return 'clear'
+    }
+
+    # 던전/사냥터: 사용자가 클리어 화면을 직접 터치해 이미 결과 화면으로 넘어간 경우 감지
+    # (2026-07-18 21:52 실측: 18초 클리어 + 수동 터치 → 워커가 클리어 문구만 계속 대기하다
+    #  시간 초과. 결과 화면에는 HUD가 없으므로, 전투 중 오탐 방지로 HUD 부재를 함께 확인)
+    if ($FindResultButton -and ($pollCounter % 2) -eq 0 -and -not $script:screenCaptureFailing) {
+      if ((& $FindResultButton) -and -not (Test-HomeEndEscHud -Game $Game)) {
+        Write-RunLog "$($script:contentTag) 결과 화면 감지 (클리어 화면이 이미 지나감)"
+        return 'reward'
+      }
     }
 
     # 어비스 전용: 사용자가 직접 진행해 보상/선택 화면으로 넘어간 경우 감지 (던전 모드에서는 건너뜀)
@@ -1732,10 +1745,13 @@ function Test-DungeonClearPrompt {
   # 실측된 깨짐 사례:
   #  - '화면을터夫6주' (2026-07-16: '치'가 깨짐)      → '화면을' + '터' 조합으로 잡음
   #  - '화n을터치해주l요' (2026-07-17: '면'이 깨짐)   → '터치해/터치하' 조각으로 잡음
+  #  - '화면을치해주세요' (2026-07-18: '터'가 통째로 소실, 클리어 화면 2분 방치 실측)
+  #    → '화면을' + '주세요' 조합으로 잡음
   # '화면을'이나 '터치'만 단독으로 쓰면 다른 안내와 겹칠 수 있어 두 조각 조합을 요구합니다.
   $ocrText = Get-GameOcrText -Game $Game
   $normalized = $ocrText -replace '\s', ''
   if ($normalized.Contains('화면을') -and $normalized.Contains('터')) { return $true }
+  if ($normalized.Contains('화면을') -and $normalized.Contains('주세요')) { return $true }
   return ($normalized.Contains('터치해') -or $normalized.Contains('터치하'))
 }
 
@@ -2876,7 +2892,8 @@ function Invoke-NormalDungeonCycle {
   # 10. 클리어 대기 - 어비스와 동일한 감지/안전장치(자동사냥 꺼짐 감시, 자동 부활,
   #     컷신 장면 넘기기, 구매 팝업 닫기)를 전부 그대로 사용합니다.
   Write-RunLog '[던전] 10. 던전 클리어 화면 감지 대기 시작'
-  $clearOutcome = Wait-ForDungeonClearScreen -Game $Game -TimeoutSeconds $timeoutClear -DungeonMode
+  $clearOutcome = Wait-ForDungeonClearScreen -Game $Game -TimeoutSeconds $timeoutClear -DungeonMode `
+    -FindResultButton { Find-DgRetryButtonPoint -Game $Game }
   if ($clearOutcome -eq 'clear') {
     Focus-Game -Game $Game
     Click-GamePoint -Game $Game -ReferenceX $ptClearCenter[0] -ReferenceY $ptClearCenter[1]
@@ -3156,7 +3173,8 @@ function Invoke-HuntingGroundCycle {
 
   # 5. 완료 대기 - 던전과 동일한 감지/안전장치(자동사냥 감시, 자동 부활, 컷신, 팝업)를 사용합니다.
   Write-RunLog '[사냥터] 5. 사냥 완료 화면 감지 대기 시작'
-  $clearOutcome = Wait-ForDungeonClearScreen -Game $Game -TimeoutSeconds $timeoutClear -DungeonMode
+  $clearOutcome = Wait-ForDungeonClearScreen -Game $Game -TimeoutSeconds $timeoutClear -DungeonMode `
+    -FindResultButton { Find-HtNewMissionPoint -Game $Game }
   if ($clearOutcome -eq 'clear') {
     Focus-Game -Game $Game
     Click-GamePoint -Game $Game -ReferenceX $ptClearCenter[0] -ReferenceY $ptClearCenter[1]
@@ -3502,6 +3520,32 @@ function Press-KeyOnce {
 try {
   $game = Get-GameProcess
   Write-RunLog "[준비] 게임 확인: PID $($game.Id)"
+
+  # ===== 적용 설정 스냅샷 (로그 파일 전용) =====
+  # GUI 화면에는 표시되지 않고([설정] 줄은 GUI가 건너뜀) 로그 파일에만 남습니다.
+  # 다른 사용자의 오류 세트(error_*.log)만 받아도 반복/콘텐츠/상세/기능 설정을
+  # 그대로 볼 수 있게 하기 위한 분석용 기록입니다. 좌표/영역 섹션은 제외합니다.
+  try {
+    $repeatInfo = [string]$env:HONEYNOGI_REPEAT_INFO
+    if ([string]::IsNullOrWhiteSpace($repeatInfo)) { $repeatInfo = '(GUI 정보 없음 - 워커 단독 실행)' }
+    Write-RunLog "[설정] 콘텐츠 '$contentCategory', 반복 $repeatInfo, coordsVersion $(Get-ConfigValue $config @('coordsVersion') '?')"
+    foreach ($sectionName in @('dungeons', 'normalDungeon', 'huntingGround', 'timeoutsSeconds', 'afterEntry', 'revive', 'rdp', 'window', 'diagnostics')) {
+      $section = $config.$sectionName
+      if ($null -eq $section) { continue }
+      # 설명용 '_' 키와 부피 큰 profiles(좌표)는 빼고 실제 값만 한 줄 JSON으로 남깁니다
+      $clean = [ordered]@{}
+      foreach ($prop in $section.PSObject.Properties) {
+        if ($prop.Name -like '_*' -or $prop.Name -eq 'profiles') { continue }
+        $clean[$prop.Name] = $prop.Value
+      }
+      if ($clean.Count -gt 0) {
+        Write-RunLog "[설정] ${sectionName}: $($clean | ConvertTo-Json -Compress -Depth 4)"
+      }
+    }
+  } catch {
+    Write-RunLog "[설정] 스냅샷 기록 실패: $($_.Exception.Message)"
+  }
+
   Focus-Game -Game $game
 
   # 게임 창 정렬: RDP 재접속·배율 변화·콘솔 전환 등으로 창 크기가 바뀌면
@@ -3996,7 +4040,8 @@ try {
   # ===== 오류 진단 덤프 =====
   # 실패 원인을 파악할 수 있도록 게임 창 스크린샷과 주요 OCR 원문을 Log 폴더에 남깁니다.
   # 스크린샷과 로그 사본은 같은 타임스탬프로 세트가 됩니다 (error_시각.png + error_시각.log).
-  $diagStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+  # 시각은 읽기 쉽게 h/m/s 표기를 씁니다 (예: error_20260718_h21m49s09.png).
+  $diagStamp = Get-Date -Format 'yyyyMMdd_\hHH\mmm\sss'
   try {
     if ($game) {
       $diagRect = New-Object HoneyNogiInput+RECT
@@ -4017,9 +4062,9 @@ try {
           $diagBmp.Dispose()
         }
 
-        # 오래된 진단 스크린샷 정리: 최근 것만 남기고(기본 20개) 나머지는 삭제해
+        # 오래된 진단 스크린샷 정리: 최근 것만 남기고(기본 10개) 나머지는 삭제해
         # Log 폴더에 무한정 쌓이지 않게 합니다. config 의 diagnostics.keepScreenshots 로 조절.
-        $keepShots = [int](Get-ConfigValue $config @('diagnostics', 'keepScreenshots') 20)
+        $keepShots = [int](Get-ConfigValue $config @('diagnostics', 'keepScreenshots') 10)
         if ($keepShots -gt 0) {
           $oldShots = @(Get-ChildItem -LiteralPath $logDir -Filter 'error_*.png' -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -Skip $keepShots)
@@ -4058,8 +4103,8 @@ try {
         -Value '[분석용] config 좌표가 구버전(coordsVersion 미달)이라 내장 최신 좌표로 동작 중이었음'
     }
     Write-RunLog "[진단] 오류 로그 사본 저장: $diagLog"
-    # 로그 사본도 스크린샷과 같은 보관 규칙(기본 20개)으로 정리합니다
-    $keepLogs = [int](Get-ConfigValue $config @('diagnostics', 'keepScreenshots') 20)
+    # 로그 사본도 스크린샷과 같은 보관 규칙(기본 10개)으로 정리합니다
+    $keepLogs = [int](Get-ConfigValue $config @('diagnostics', 'keepScreenshots') 10)
     if ($keepLogs -gt 0) {
       $oldLogs = @(Get-ChildItem -LiteralPath $logDir -Filter 'error_*.log' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -Skip $keepLogs)
