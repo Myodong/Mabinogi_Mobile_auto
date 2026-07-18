@@ -2451,13 +2451,15 @@ function Set-DgToggleCard {
   for ($setTry = 1; $setTry -le 6; $setTry++) {
     $lastText = (Get-GameRegionOcrText -Game $Game -ReferenceX $Region[0] -ReferenceY $Region[1] `
       -RegionWidth $Region[2] -RegionHeight $Region[3] -Scale 5 -Engine $ocrKoreanEngine) -replace '\s', ''
-    $isSelected = ($lastText.Contains('됨') -or $lastText.Contains('선택'))
+    # '선태되' = '선택됨' 깨짐 실측 (2026-07-19 00:21 - '됨'도 '선택'도 안 남아 판별 불가였음)
+    $isSelected = ($lastText.Contains('됨') -or $lastText.Contains('선택') -or $lastText.Contains('선태'))
     $isChallenge = $lastText.Contains('도전')
     if (-not ($isSelected -or $isChallenge) -and $AltRegion) {
       $altText = (Get-GameRegionOcrText -Game $Game -ReferenceX $AltRegion[0] -ReferenceY $AltRegion[1] `
         -RegionWidth $AltRegion[2] -RegionHeight $AltRegion[3] -Scale 5 -Engine $ocrKoreanEngine) -replace '\s', ''
       if ($altText) { $lastText = $altText }
-      $isSelected = ($lastText.Contains('됨') -or $lastText.Contains('선택'))
+      # '선태되' = '선택됨' 깨짐 실측 (2026-07-19 00:21 - '됨'도 '선택'도 안 남아 판별 불가였음)
+    $isSelected = ($lastText.Contains('됨') -or $lastText.Contains('선택') -or $lastText.Contains('선태'))
       $isChallenge = $lastText.Contains('도전')
     }
     if (-not ($isSelected -or $isChallenge)) {
@@ -2748,6 +2750,45 @@ function Invoke-NormalDungeonCycle {
       }
     } else {
       Write-RunLog "[경고] 공물 소모량이 예상 밖입니다 (예상 ${expectedCost}, 실제 ${actualCost}) - OCR 오류 가능성이 있어 현재 상태로 진행합니다"
+    }
+  } else {
+    # 5-1(역방향). 미사용(원래 설정이든 '소진 시 미사용으로 계속' 강등이든)인데도 입장
+    # 버튼에 소모량(10/20)이 보이면 소탕 카드가 켜진 채 남은 것입니다 (2026-07-19 00:21
+    # 실측: 카드 글자가 '선태되'로 깨져 판별 불가 → 해제 클릭을 못 한 채 잔량 6개로
+    # 입장하기가 거부돼 45초 헛대기. 버튼 숫자 '10 입장하기'는 멀쩡히 읽혔음).
+    # 버튼 숫자가 카드 글자보다 크고 또렷해 이걸로 역방향 검증합니다.
+    Start-Sleep -Milliseconds 500
+    $offCost = Get-DgTributeCost -Game $Game
+    if ($null -ne $offCost -and ($offCost -eq 10 -or $offCost -eq 20)) {
+      Write-RunLog "[경고] 은동전 미사용인데 입장 버튼에 소모량 ${offCost}개가 보입니다 - 소탕 카드를 눌러 해제합니다"
+      # 상태 기반 해제: 10/20이 '그대로 보일 때만' 클릭(최대 2회)합니다.
+      #  - null = 숫자 사라짐(해제 성공). 단 캡처 실패 중의 null은 증거가 아니므로 기다렸다 재확인
+      #  - 10/20이 아닌 잡음 숫자 = 순방향 검증과 같은 기준으로 OCR 오류 가능성 - 클릭하지 않고 경고 후 진행
+      #    (해제된 카드를 확인 없이 재클릭해 도로 켜는 사고 방지 - 무조건 재클릭 금지 원칙)
+      $offCleared = $false
+      $offClicks = 0
+      for ($offTry = 1; $offTry -le 5; $offTry++) {
+        if ($null -eq $offCost) {
+          if (-not $script:screenCaptureFailing) { $offCleared = $true; break }
+          Start-Sleep -Milliseconds 1500   # 캡처 실패 중 - 입력 없이 재확인
+        } elseif ($offCost -eq 10 -or $offCost -eq 20) {
+          if ($offClicks -ge 2) { break }
+          $offClicks++
+          Focus-Game -Game $Game
+          Click-GamePoint -Game $Game -ReferenceX $ptDgCoinButton[0] -ReferenceY $ptDgCoinButton[1]
+          Start-Sleep -Milliseconds 1100
+        } else {
+          break
+        }
+        $offCost = Get-DgTributeCost -Game $Game
+      }
+      if ($offCleared) {
+        Write-RunLog '[던전] 소모량 표시 사라짐 - 은동전 미사용 확인'
+      } elseif ($null -ne $offCost -and ($offCost -eq 10 -or $offCost -eq 20)) {
+        throw "은동전 미사용 설정인데 소탕을 해제하지 못했습니다 (입장 버튼 소모량: ${offCost}개). 게임에서 소탕 카드를 직접 '도전'으로 바꾼 뒤 다시 시작해 주세요."
+      } else {
+        Write-RunLog "[경고] 소탕 해제 확인이 불명확합니다 (소모량 판독: '$offCost') - 현재 상태로 진행합니다"
+      }
     }
   }
 
@@ -3095,6 +3136,40 @@ function Invoke-HuntingGroundCycle {
       }
     } else {
       Write-RunLog "[경고] 공물 소모량이 예상 밖입니다 (예상 ${expectedCost}, 실제 ${actualCost}) - OCR 오류 가능성이 있어 현재 상태로 진행합니다"
+    }
+  } else {
+    # 역방향 검증: 미사용인데도 시작 버튼에 소모량(10/20)이 보이면 카드가 켜진 채 남은 것
+    # (던전 2026-07-19 00:21 실측 사고와 동일 구조 - 카드 글자 깨짐 대비).
+    # 사냥터 화면에 소모량 표기가 없으면 읽기 실패($null)로 건너뛰므로 무해합니다.
+    Start-Sleep -Milliseconds 500
+    $offCost = Get-DgTributeCost -Game $Game
+    if ($null -ne $offCost -and ($offCost -eq 10 -or $offCost -eq 20)) {
+      Write-RunLog "[경고] 은동전 미사용인데 시작 버튼에 소모량 ${offCost}개가 보입니다 - 은동전(사냥 임무) 카드를 눌러 해제합니다"
+      # 상태 기반 해제 (던전 역방향 검증과 동일한 규칙 - 그쪽 주석 참고)
+      $offCleared = $false
+      $offClicks = 0
+      for ($offTry = 1; $offTry -le 5; $offTry++) {
+        if ($null -eq $offCost) {
+          if (-not $script:screenCaptureFailing) { $offCleared = $true; break }
+          Start-Sleep -Milliseconds 1500   # 캡처 실패 중 - 입력 없이 재확인
+        } elseif ($offCost -eq 10 -or $offCost -eq 20) {
+          if ($offClicks -ge 2) { break }
+          $offClicks++
+          Focus-Game -Game $Game
+          Click-GamePoint -Game $Game -ReferenceX $ptHtCardButton[0] -ReferenceY $ptHtCardButton[1]
+          Start-Sleep -Milliseconds 1100
+        } else {
+          break
+        }
+        $offCost = Get-DgTributeCost -Game $Game
+      }
+      if ($offCleared) {
+        Write-RunLog '[사냥터] 소모량 표시 사라짐 - 은동전 미사용 확인'
+      } elseif ($null -ne $offCost -and ($offCost -eq 10 -or $offCost -eq 20)) {
+        throw "은동전 미사용 설정인데 은동전(사냥 임무)을 해제하지 못했습니다 (시작 버튼 소모량: ${offCost}개). 게임에서 카드를 직접 '도전'으로 바꾼 뒤 다시 시작해 주세요."
+      } else {
+        Write-RunLog "[경고] 카드 해제 확인이 불명확합니다 (소모량 판독: '$offCost') - 현재 상태로 진행합니다"
+      }
     }
   }
 
