@@ -1,7 +1,8 @@
 # IDE
 .idea/
+.claude/
 
 # 빌드 결과물 (바이너리는 GitHub Releases로 배포)
 build/
 HoneyNogi.exe
-MabinogiAuto.exe
+요청사항.md
