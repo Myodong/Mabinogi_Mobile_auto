@@ -1457,8 +1457,9 @@ function Start-NextCycle {
     $script:logSeen = if ($null -ne $existing) { $existing.Count } else { 0 }
   }
   $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $workerScript + '"'))
-  # 반복 모드는 config에 저장되지 않는 GUI 상태라 환경변수로 워커에 전달합니다.
+  # 반복 모드와 앱 버전은 config에 없는 GUI 쪽 정보라 환경변수로 워커에 전달합니다.
   # 워커가 이 값을 로그 파일의 [설정] 스냅샷(화면 미표시)에 함께 기록합니다.
+  $env:HONEYNOGI_APP_VERSION = $appVersion
   $env:HONEYNOGI_REPEAT_INFO = if ($null -ne $script:targetTime) {
     "시간 지정(~$($script:targetTime.ToString('MM-dd HH:mm')))"
   } elseif ($script:targetCycles -gt 0) {
@@ -1896,6 +1897,18 @@ $script:updateTimer.Add_Tick({
     $lblVersion.Visible = $false
     $lnkUpdate.Text = "새 버전 v$remoteVersion 다운로드"
     $lnkUpdate.Visible = $true
+    # 구버전 실행 시 새 버전 안내 팝업 (확인 1번 = 안내만, 자동 동작 없음).
+    # 자동화가 이미 실행 중이면 팝업으로 방해하지 않고 우하단 링크만 보여줍니다.
+    if (-not $script:running) {
+      [System.Windows.Forms.MessageBox]::Show(
+        $form,
+        ("새 버전 v$remoteVersion 이 나왔습니다!" + [Environment]::NewLine + [Environment]::NewLine +
+          "우측 하단의 '새 버전 다운로드' 링크를 누르면" + [Environment]::NewLine +
+          "다운로드 페이지가 열립니다."),
+        '꿀비노기 업데이트 안내',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    }
   })
 $script:updateTimer.Start()
 

@@ -3528,7 +3528,9 @@ try {
   try {
     $repeatInfo = [string]$env:HONEYNOGI_REPEAT_INFO
     if ([string]::IsNullOrWhiteSpace($repeatInfo)) { $repeatInfo = '(GUI 정보 없음 - 워커 단독 실행)' }
-    Write-RunLog "[설정] 콘텐츠 '$contentCategory', 반복 $repeatInfo, coordsVersion $(Get-ConfigValue $config @('coordsVersion') '?')"
+    $appVersionInfo = [string]$env:HONEYNOGI_APP_VERSION
+    if ([string]::IsNullOrWhiteSpace($appVersionInfo)) { $appVersionInfo = '?' }
+    Write-RunLog "[설정] 꿀비노기 v$appVersionInfo, 콘텐츠 '$contentCategory', 반복 $repeatInfo, coordsVersion $(Get-ConfigValue $config @('coordsVersion') '?')"
     foreach ($sectionName in @('dungeons', 'normalDungeon', 'huntingGround', 'timeoutsSeconds', 'afterEntry', 'revive', 'rdp', 'window', 'diagnostics')) {
       $section = $config.$sectionName
       if ($null -eq $section) { continue }
