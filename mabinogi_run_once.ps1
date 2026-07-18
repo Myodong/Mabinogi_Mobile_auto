@@ -2303,10 +2303,15 @@ function Wait-ForResultScreen {
     if ($retryPoint) { break }
 
     $lootLabelPoint = Find-GameTextPoint -Game $Game -ReferenceX $rgDgLootReveal[0] -ReferenceY $rgDgLootReveal[1] `
-      -RegionWidth $rgDgLootReveal[2] -RegionHeight $rgDgLootReveal[3] -SearchText '전리품'
+      -RegionWidth $rgDgLootReveal[2] -RegionHeight $rgDgLootReveal[3] -SearchText '발견'
     if ($lootLabelPoint) {
       Focus-Game -Game $Game
-      Click-ScreenPoint -X $lootLabelPoint.X -Y $lootLabelPoint.Y
+      # 라벨 지점을 그대로 클릭하면 게임 커서가 라벨 위에 주차돼 다음 폴링부터 OCR이
+      # 라벨을 못 읽어 진행 클릭이 멈춥니다 (2026-07-19 08:26 실측: '발견한전'으로 판독,
+      # 82초 방치 후 시간 초과). 어디를 눌러도 진행되는 화면이므로 라벨/카드에서 떨어진
+      # 빈 배경(400,300)을 클릭해 커서가 감지를 가리지 않게 합니다.
+      # 탐색어도 '발견' 조각으로 완화 (다른 요인으로 라벨 일부가 가려져도 감지 유지).
+      Click-GamePoint -Game $Game -ReferenceX 400 -ReferenceY 300
       Write-RunLog "$($script:contentTag) 전리품 공개 화면 - 화면 클릭으로 진행"
       Start-Sleep -Seconds 2
       continue
