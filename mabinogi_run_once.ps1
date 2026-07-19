@@ -1684,8 +1684,10 @@ function Wait-ForDungeonClearScreen {
         ((Get-Date) - $lastFocus).TotalSeconds -ge $refocusEverySeconds) {
       if (Invoke-AutoRefocus -Game $Game) { $lastFocus = Get-Date }
     }
-    # 던전 모드는 판이 짧아 감지 지연이 도드라지므로 폴링 간격을 절반(1초)으로 줄입니다
-    Start-Sleep -Milliseconds $(if ($DungeonMode) { 1000 } else { 2000 })
+    # 폴링 간격 1초 (던전/어비스 공통): 원래 어비스는 2초였으나 보스 클리어 후
+    # '화면을 터치' 감지가 늦다는 실사용 피드백(2026-07-19)으로 던전과 동일하게 통일.
+    # 클리어 확인이 매 바퀴 첫 순서이므로 감지 지연 = 이 간격 + 나머지 검사 시간.
+    Start-Sleep -Milliseconds 1000
 
     # 제한 시간이 다 됐어도 던전 안(퀘스트 추적기에 클리어 목표)이 확인되면 전투가 아직
     # 진행 중인 것이므로 오류로 끝내지 않고 60초씩 연장합니다 (다른 PC 실측 2026-07-17:
