@@ -133,6 +133,10 @@ $ptEscButton   = @(Get-ConfigValue $config @('clickPoints', 'escButton') @(1083,
 $ptAbyssMenu   = @(Get-ConfigValue $config @('clickPoints', 'abyssMenu') @(971, 387))   # 2026-07-16 UI 개편: 아이콘 그리드 메뉴의 '어비스' 타일 (OCR 실측)
 
 $rgClearExit   = @(Get-ConfigValue $config @('ocrRegions', 'clearAndExitText') @(430, 570, 420, 125))
+# 클리어 화면 좌측 점수표(빠른 처치/완벽한 전투/재도전·협동 보너스 등) - 하단 문구의 보조 신호.
+# 하단 문구는 캐릭터가 겹쳐 깨지기 일쑤지만 점수표는 겹치지 않는 위치라 안정적 (2026-07-19 실측:
+# 클리어 캡처 2장 모두 라벨 판독, 결과/옵션/전투 화면에선 미검출)
+$rgClearScore  = @(185, 300, 230, 165)
 $rgEnterButton = @(Get-ConfigValue $config @('ocrRegions', 'enterButton') @(880, 630, 200, 48))
 $rgHomeEndEsc  = @(Get-ConfigValue $config @('ocrRegions', 'homeEndEsc') @(875, 60, 265, 55))
 $rgAbyssMenu   = @(Get-ConfigValue $config @('ocrRegions', 'abyssMenu') @(850, 330, 350, 85))   # 2026-07-16 UI 개편: '필드 보스/어비스/망령의 탑/레이드' 줄 (OCR 실측)
@@ -1773,12 +1777,26 @@ function Test-DungeonClearPrompt {
   #  - '화n을터치해주l요' (2026-07-17: '면'이 깨짐)   → '터치해/터치하' 조각으로 잡음
   #  - '화면을치해주세요' (2026-07-18: '터'가 통째로 소실, 클리어 화면 2분 방치 실측)
   #    → '화면을' + '주세요' 조합으로 잡음
+  #  - '면百치해' / '화면치6H天서j“' (2026-07-19: 캐릭터가 글자 뒤에 겹쳐 판독마다 다르게
+  #    깨짐 - 같은 화면에서 600초 초과 실측. 진단과 재현 판독이 서로 달랐음)
+  #    → '면'+'치해' 및 '화면'+'치' 조합으로 잡음 ('경험치 고二', '보상을확인해주세요' 같은
+  #      비대상 실측 판독에는 안 걸리는 조합 - 진리표 테스트 참고)
   # '화면을'이나 '터치'만 단독으로 쓰면 다른 안내와 겹칠 수 있어 두 조각 조합을 요구합니다.
   $ocrText = Get-GameOcrText -Game $Game
   $normalized = $ocrText -replace '\s', ''
   if ($normalized.Contains('화면을') -and $normalized.Contains('터')) { return $true }
   if ($normalized.Contains('화면을') -and $normalized.Contains('주세요')) { return $true }
-  return ($normalized.Contains('터치해') -or $normalized.Contains('터치하'))
+  if ($normalized.Contains('치해') -and $normalized.Contains('면')) { return $true }
+  if ($normalized.Contains('화면') -and $normalized.Contains('치')) { return $true }
+  if ($normalized.Contains('터치해') -or $normalized.Contains('터치하')) { return $true }
+
+  # 보조 신호(사용자 제안 2026-07-19): 하단 문구가 아예 못 읽힐 만큼 깨져도, 클리어 화면
+  # 좌측 점수표('빠른 처치'/'완벽한 전투'/'재도전·협동 보너스')는 캐릭터와 안 겹쳐 잘 읽힙니다.
+  # '처치' + ('완벽' 또는 '보너스') 두 줄 조합 요구 - 결과/옵션/전투 화면 실측 판독에는 안 걸림.
+  # (제목 '던전 클리어!'는 스타일 폰트라 '코전쎠/'처럼 깨져 신호로 쓰지 않음 - 실측 2장 공통)
+  $scoreText = (Get-GameRegionOcrText -Game $Game -ReferenceX $rgClearScore[0] -ReferenceY $rgClearScore[1] `
+    -RegionWidth $rgClearScore[2] -RegionHeight $rgClearScore[3] -Scale 3 -Engine $ocrKoreanEngine) -replace '\s', ''
+  return ($scoreText.Contains('처치') -and ($scoreText.Contains('완벽') -or $scoreText.Contains('보너스')))
 }
 
 function Test-NoticeBoardPopup {
