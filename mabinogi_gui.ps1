@@ -144,12 +144,13 @@ $script:esRelease   = [uint32]2147483648   # 0x80000000 (ES_CONTINUOUS only)
 # 앱 버전 (단일 관리 지점): 여기만 올리면 GUI 제목·로그·exe 파일 속성(빌드 시 자동 추출)에
 # 모두 반영됩니다. 파일명은 HoneyNogi.exe 로 고정 - 업데이트는 늘 '덮어쓰기 한 번'.
 # ※ 좌표 버전(coordsVersion)과는 별개입니다 (그쪽은 화면 좌표 변경 시에만 올림)
-$appVersion = '1.1.0'
+$appVersion = '1.1.1'
 
 $scriptRoot = $PSScriptRoot
 $configPath = Join-Path $scriptRoot 'config.json'
 $workerScript = Join-Path $scriptRoot 'mabinogi_run_once.ps1'
 $workerLog = Join-Path $scriptRoot 'Log\mabinogi_run_once.log'
+$workerRecoveryLog = Join-Path $scriptRoot 'Log\mabinogi_run_once.recovery.log'
 # 안전 중지 신호 파일: GUI가 만들면 워커가 '던전 밖(HUD) 확인' 시점에서 회차를 조기 종료합니다.
 $safeStopFlag = Join-Path $scriptRoot 'Log\safe_stop.flag'
 # 커스텀 반복 완료 마커: 던전/어비스를 별도 파일로 두어 한쪽 모드로 먼저 시작해도 다른 쪽의
@@ -452,6 +453,7 @@ $script:completedCycles = 0
 $script:targetCycles = 0      # 0 = 무한
 $script:targetTime = $null    # 시간 지정 모드의 목표 시각 (null = 사용 안 함)
 $script:logOffset = [long]0
+$script:recoveryLogOffset = [long]0
 $script:uiReady = $false      # 초기 로딩 중 설정 저장이 일어나지 않게 하는 플래그
 $script:preparedStreak = 0    # 연속 '준비 실행'(코드 10) 횟수 - 화면 오판으로 인한 무한 준비 루프 방지 (컨트롤러와 동일)
 # --- 커스텀 반복(던전/어비스 리스트 모드) 실행 컨텍스트 ---
@@ -1150,19 +1152,20 @@ $grpContentDetail.Controls.Add($pnlCrExhaust)
 $lblCrExhaust = New-Object System.Windows.Forms.Label
 $lblCrExhaust.Text = '동전 소진 시(잔량 10 미만):'
 $lblCrExhaust.Location = New-Object System.Drawing.Point(0, 5)
-$lblCrExhaust.Size = New-Object System.Drawing.Size(175, 20)
+# 폭 195 = 아래 '더블 루팅 불가 시' 라벨과 동일 - 두 줄의 라디오 시작 위치를 세로로 맞춥니다
+$lblCrExhaust.Size = New-Object System.Drawing.Size(195, 20)
 $pnlCrExhaust.Controls.Add($lblCrExhaust)
 
 $rbCrExhaustStop = New-Object System.Windows.Forms.RadioButton
 $rbCrExhaustStop.Text = '멈춤'
-$rbCrExhaustStop.Location = New-Object System.Drawing.Point(180, 2)
+$rbCrExhaustStop.Location = New-Object System.Drawing.Point(200, 2)
 $rbCrExhaustStop.Size = New-Object System.Drawing.Size(60, 22)
 $rbCrExhaustStop.Checked = $true
 $pnlCrExhaust.Controls.Add($rbCrExhaustStop)
 
 $rbCrExhaustGo = New-Object System.Windows.Forms.RadioButton
 $rbCrExhaustGo.Text = '미사용으로 진행'
-$rbCrExhaustGo.Location = New-Object System.Drawing.Point(245, 2)
+$rbCrExhaustGo.Location = New-Object System.Drawing.Point(265, 2)
 $rbCrExhaustGo.Size = New-Object System.Drawing.Size(135, 22)
 $pnlCrExhaust.Controls.Add($rbCrExhaustGo)
 
@@ -2835,6 +2838,26 @@ function Test-TimeAllowsNextCycle {
   return ($estimatedEnd -le $script:targetTime)
 }
 
+function Move-WorkerLogToArchive {
+  param(
+    [string]$Path,
+    [string]$Suffix = ''
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) { return [long]0 }
+  try {
+    $archiveStamp = (Get-Item -LiteralPath $Path -ErrorAction Stop).LastWriteTime.ToString('yyyyMMdd_\hHH\mmm\sss')
+    $archivePath = Join-Path $scriptRoot ("Log\run_{0}{1}.log" -f $archiveStamp, $Suffix)
+    Move-Item -LiteralPath $Path -Destination $archivePath -Force -ErrorAction Stop
+    return [long]0
+  } catch {
+    # 외부 프로그램이 파일을 잠갔으면 과거 내용은 GUI에 다시 표시하지 않고, 워커가 기본 로그를
+    # 열 수 없을 때 사용할 복구 로그를 별도로 감시합니다.
+    try { return [long](Get-Item -LiteralPath $Path -ErrorAction Stop).Length }
+    catch { return [long]0 }
+  }
+}
+
 function Start-NextCycle {
   $cycleNumber = $script:completedCycles + 1
   # 지난 세션(또는 직전 회차)의 로그 파일이 남아 있으면, 워커가 새로 쓰기 전에
@@ -2842,24 +2865,13 @@ function Start-NextCycle {
   # 워커 시작 전에 파일을 치워 과거 로그가 다시 뜨지 않게 하되, 그냥 지우지 않고
   # run_시각.log 로 보관해 지난 회차 로그를 최근 10개까지 남깁니다 (오류 세트 보관 개수와 동일).
   # 시각은 읽기 쉽게 h/m/s 표기를 씁니다 (예: run_20260718_h21m49s09.log).
-  try {
-    if (Test-Path -LiteralPath $workerLog) {
-      $archiveStamp = (Get-Item -LiteralPath $workerLog).LastWriteTime.ToString('yyyyMMdd_\hHH\mmm\sss')
-      $archivePath = Join-Path $scriptRoot ("Log\run_{0}.log" -f $archiveStamp)
-      Move-Item -LiteralPath $workerLog -Destination $archivePath -Force -ErrorAction Stop
-      # 보관 개수(10개) 초과분은 오래된 것부터 삭제 (정리는 파일명이 아니라 수정 시각 기준이라
-      # 옛 형식(run_20260718_214909.log) 파일이 섞여 있어도 함께 정리됩니다)
-      $oldRunLogs = @(Get-ChildItem -Path (Join-Path $scriptRoot 'Log') -Filter 'run_*.log' -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -Skip 10)
-      foreach ($oldLog in $oldRunLogs) { Remove-Item -LiteralPath $oldLog.FullName -Force -ErrorAction SilentlyContinue }
-    }
-    $script:logOffset = [long]0
-  } catch {
-    # 파일이 잠겨 이동이 안 되면 기존 파일 끝부터 시작합니다. 워커가 파일을 다시 만들며
-    # 길이가 짧아지면 Read-NewLogLines가 오프셋을 0으로 되돌립니다.
-    try { $script:logOffset = [long](Get-Item -LiteralPath $workerLog -ErrorAction Stop).Length }
-    catch { $script:logOffset = [long]0 }
-  }
+  $script:logOffset = Move-WorkerLogToArchive -Path $workerLog
+  $script:recoveryLogOffset = Move-WorkerLogToArchive -Path $workerRecoveryLog -Suffix '_recovery'
+  # 보관 개수(10개) 초과분은 오래된 것부터 삭제 (정리는 파일명이 아니라 수정 시각 기준이라
+  # 옛 형식과 복구 로그가 섞여 있어도 함께 정리됩니다)
+  $oldRunLogs = @(Get-ChildItem -Path (Join-Path $scriptRoot 'Log') -Filter 'run_*.log' -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -Skip 10)
+  foreach ($oldLog in $oldRunLogs) { Remove-Item -LiteralPath $oldLog.FullName -Force -ErrorAction SilentlyContinue }
   $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $workerScript + '"'))
   # 반복 모드와 앱 버전은 config에 없는 GUI 쪽 정보라 환경변수로 워커에 전달합니다.
   # 워커가 이 값을 로그 파일의 [설정] 스냅샷(화면 미표시)에 함께 기록합니다.
@@ -3003,6 +3015,16 @@ $timer.Add_Tick({
       if ($null -ne $lines) {
         for ($i = 0; $i -lt $lines.Count; $i++) {
           $displayLine = Convert-WorkerLogLineForGui -Line $lines[$i] -CustomActive $script:customActive
+          if ($null -eq $displayLine) { continue }
+          Add-ColoredLogLine ('  ' + $displayLine)
+        }
+      }
+      # 기본 로그가 이미 잠긴 상태에서 시작했거나 쓰기 스트림에 장애가 생긴 경우 워커는
+      # 복구 로그로 전환합니다. 기본 로그의 마지막 오프셋 이후 내용을 이어서 화면에 표시합니다.
+      $recoveryLines = Read-NewLogLines -Path $workerRecoveryLog -Offset ([ref]$script:recoveryLogOffset)
+      if ($null -ne $recoveryLines) {
+        for ($i = 0; $i -lt $recoveryLines.Count; $i++) {
+          $displayLine = Convert-WorkerLogLineForGui -Line $recoveryLines[$i] -CustomActive $script:customActive
           if ($null -eq $displayLine) { continue }
           Add-ColoredLogLine ('  ' + $displayLine)
         }

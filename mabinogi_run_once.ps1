@@ -915,6 +915,7 @@ if (-not (Test-Path -LiteralPath $logDir)) {
   New-Item -ItemType Directory -Path $logDir | Out-Null
 }
 $logPath = Join-Path $logDir 'mabinogi_run_once.log'
+$logRecoveryPath = Join-Path $logDir 'mabinogi_run_once.recovery.log'
 # 안전 중지 신호 파일: 컨트롤 패널에서 '안전 중지'를 누르면 생성됩니다.
 # 이 파일이 있으면 던전에서 나와 밖(HUD)이 확인된 시점에서 회차를 조기 종료합니다.
 $safeStopFlagPath = Join-Path $logDir 'safe_stop.flag'
@@ -937,20 +938,117 @@ $script:lastGoodStationName = $null
 # 현재 실행 중인 콘텐츠의 로그 접두어입니다. 공통 함수(클리어 대기, 토글 카드, 팝업 처리 등)의
 # 로그가 어느 콘텐츠에서 나온 것인지 보이도록, 던전/사냥터 흐름 진입 시 각자 값으로 바꿉니다.
 $script:contentTag = '[어비스]'
+# 실패해도 진행하는 '확인 경고'(게임 전면화·커서 이동)의 반복 억제 상태입니다.
+# 이 확인들은 클릭마다 호출되므로, 사용자가 PC를 쓰는 동안(다른 창이 전면) 같은 경고가
+# 로그를 도배했습니다(2026-07-22 어비스 실주행 실측). 연속 실패 중에는 첫 1회만 남기고,
+# 회복될 때 그 사이 억제한 횟수와 함께 한 번 더 안내해 진단 정보는 보존합니다.
+$script:focusWarnActive = $false
+$script:focusWarnSuppressed = 0
+$script:cursorWarnActive = $false
+$script:cursorWarnSuppressed = 0
+$script:runLogWriter = $null
+$script:runLogTargetPath = $null
+$script:runLogUsingRecovery = $false
+$script:runLogHeader = $null
+$script:runLogOpenAttempts = 20
+$script:runLogRetryDelayMs = 50
+
+function Close-RunLogWriter {
+  if ($null -ne $script:runLogWriter) {
+    try { $script:runLogWriter.Flush() } catch {}
+    try { $script:runLogWriter.Dispose() } catch {}
+  }
+  $script:runLogWriter = $null
+  $script:runLogTargetPath = $null
+}
+
+function Open-RunLogWriter {
+  param(
+    [string]$Path,
+    [System.IO.FileMode]$Mode
+  )
+
+  for ($attempt = 0; $attempt -lt $script:runLogOpenAttempts; $attempt++) {
+    $stream = $null
+    try {
+      # 워커가 먼저 공유 쓰기 스트림을 유지하면, 나중에 실행된 tail 등 읽기 도구가
+      # 쓰기를 막는 방식으로 파일을 열 수 없습니다. GUI의 공유 읽기와 파일 보관은 허용합니다.
+      $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+      $stream = New-Object System.IO.FileStream($Path, $Mode, [System.IO.FileAccess]::Write, $share)
+      $writer = New-Object System.IO.StreamWriter($stream, (New-Object System.Text.UTF8Encoding($true)))
+      $writer.AutoFlush = $true
+      return $writer
+    } catch {
+      if ($null -ne $stream) { try { $stream.Dispose() } catch {} }
+      if ($attempt + 1 -lt $script:runLogOpenAttempts -and $script:runLogRetryDelayMs -gt 0) {
+        Start-Sleep -Milliseconds $script:runLogRetryDelayMs
+      }
+    }
+  }
+  return $null
+}
+
+function Initialize-RunLog {
+  param([switch]$Reset)
+
+  Close-RunLogWriter
+  $script:runLogUsingRecovery = $false
+  if ($Reset -or [string]::IsNullOrWhiteSpace($script:runLogHeader)) {
+    $script:runLogHeader = "[$(Get-Date -Format 'yyyy-MM-dd')] 자동화 로그 (시작 $(Get-Date -Format 'HH:mm:ss'))"
+  }
+
+  $mode = if ($Reset) { [System.IO.FileMode]::Create } else { [System.IO.FileMode]::Append }
+  $writer = Open-RunLogWriter -Path $logPath -Mode $mode
+  if ($null -eq $writer) {
+    $writer = Open-RunLogWriter -Path $logRecoveryPath -Mode $mode
+    if ($null -eq $writer) {
+      throw "기본 로그와 복구 로그를 모두 열 수 없습니다: '$logPath', '$logRecoveryPath'"
+    }
+    $script:runLogUsingRecovery = $true
+    $script:runLogTargetPath = $logRecoveryPath
+  } else {
+    $script:runLogTargetPath = $logPath
+  }
+  $script:runLogWriter = $writer
+
+  if ($Reset) { $script:runLogWriter.WriteLine($script:runLogHeader) }
+  if ($script:runLogUsingRecovery) {
+    $warningLine = "$(Get-Date -Format 'HH:mm:ss') [경고] 기본 로그 파일이 다른 프로그램에 잠겨 복구 로그(mabinogi_run_once.recovery.log)로 기록합니다"
+    $script:runLogWriter.WriteLine($warningLine)
+    Write-Host $warningLine -ForegroundColor Yellow
+  }
+}
 
 function Write-RunLog {
   param([string]$Message)
   # 날짜는 로그 맨 위 헤더에 한 번만 기록하고, 각 줄에는 시각만 붙입니다.
   $line = "$(Get-Date -Format 'HH:mm:ss') $Message"
-  # 컨트롤러 등 다른 프로세스가 로그를 읽는 순간과 겹치면 쓰기가 잠깐 실패할 수 있습니다.
-  # 로그 기록 실패로 자동화 전체가 죽지 않도록 짧게 재시도하고, 끝내 실패해도 진행을 계속합니다.
-  for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    try {
-      Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8 -ErrorAction Stop
-      break
-    } catch {
-      Start-Sleep -Milliseconds 50
+  if ($null -eq $script:runLogWriter) { Initialize-RunLog }
+
+  try {
+    $script:runLogWriter.WriteLine($line)
+  } catch {
+    $primaryError = $_.Exception.Message
+    $failedPath = $script:runLogTargetPath
+    Close-RunLogWriter
+    if ($script:runLogUsingRecovery) {
+      throw "복구 로그 기록에도 실패했습니다('$failedPath'): $primaryError"
     }
+
+    # 디스크/외부 프로그램 문제로 열린 기본 스트림 자체가 실패하면, 실패한 줄부터 복구 로그에
+    # 이어 적습니다. 중복 가능성보다 누락 방지를 우선하며 이후 줄도 같은 스트림을 사용합니다.
+    $script:runLogUsingRecovery = $true
+    $recoveryWriter = Open-RunLogWriter -Path $logRecoveryPath -Mode ([System.IO.FileMode]::Create)
+    if ($null -eq $recoveryWriter) {
+      throw "기본 로그 기록 실패 후 복구 로그도 열 수 없습니다('$failedPath'): $primaryError"
+    }
+    $script:runLogWriter = $recoveryWriter
+    $script:runLogTargetPath = $logRecoveryPath
+    $script:runLogWriter.WriteLine($script:runLogHeader)
+    $warningLine = "$(Get-Date -Format 'HH:mm:ss') [경고] 기본 로그 기록 중 오류가 발생해 복구 로그(mabinogi_run_once.recovery.log)로 전환했습니다: $primaryError"
+    $script:runLogWriter.WriteLine($warningLine)
+    $script:runLogWriter.WriteLine($line)
+    Write-Host $warningLine -ForegroundColor Yellow
   }
   Write-Host $line
 }
@@ -985,17 +1083,10 @@ if (-not $script:instanceMutex.WaitOne(0)) {
   exit 2
 }
 
-for ($attempt = 0; $attempt -lt 20; $attempt++) {
-  try {
-    Set-Content -LiteralPath $logPath -Value "[$(Get-Date -Format 'yyyy-MM-dd')] 자동화 로그 (시작 $(Get-Date -Format 'HH:mm:ss'))" -Encoding UTF8 -ErrorAction Stop
-    break
-  } catch {
-    Start-Sleep -Milliseconds 50
-  }
-}
+Initialize-RunLog -Reset
 $Host.UI.RawUI.WindowTitle = '꿀비노기'
 Write-Host '꿀비노기(마비노기 모바일 자동화)를 시작합니다.' -ForegroundColor Cyan
-Write-Host '진행 상황은 이 창과 mabinogi_run_once.log에 기록됩니다.' -ForegroundColor DarkGray
+Write-Host '진행 상황은 이 창과 Log 폴더의 실행 로그에 기록됩니다.' -ForegroundColor DarkGray
 foreach ($configWarning in @($script:configValidationWarnings)) {
   Write-RunLog "[경고] $configWarning"
 }
@@ -1332,11 +1423,25 @@ function Test-GameForeground {
   return ($root -eq $Game.MainWindowHandle)
 }
 
+function Get-RepeatWarnAction {
+  # 실패해도 진행하는 '확인 경고'의 반복 억제 판정입니다. 클릭마다 호출되는 확인(전면화·커서)이
+  # 실패 상태로 머물면 같은 줄이 로그를 채우므로, 연속 실패 중에는 첫 1회만 남기고 회복 시
+  # 한 번 더 안내합니다. 반환: 'warn'(경고 기록) / 'recover'(회복 안내) / 'none'(기록 없음)
+  param([bool]$WasWarned, [bool]$Failed)
+  if ($Failed) {
+    if ($WasWarned) { return 'none' }
+    return 'warn'
+  }
+  if ($WasWarned) { return 'recover' }
+  return 'none'
+}
+
 function Focus-Game {
   param([System.Diagnostics.Process]$Game)
 
   # SetForegroundWindow 반환값은 실제 결과와 어긋날 수 있어 신뢰하지 않고, 전면 루트 창을
   # 확인합니다. 첫 시도가 빗나가면 ALT 트릭을 포함해 한 번 더 시도하되 클릭 자체는 막지 않습니다.
+  $focusOk = $false
   for ($focusTry = 1; $focusTry -le 2; $focusTry++) {
     [HoneyNogiInput]::ShowWindowAsync($Game.MainWindowHandle, 9) | Out-Null
     [HoneyNogiInput]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
@@ -1348,9 +1453,22 @@ function Focus-Game {
       [HoneyNogiInput]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
     }
     Start-Sleep -Milliseconds 350
-    if (Test-GameForeground -Game $Game) { return }
+    if (Test-GameForeground -Game $Game) { $focusOk = $true; break }
   }
-  Write-RunLog '[경고] 게임 창 전면화를 두 번 시도했지만 실제 전면 루트 창으로 확인되지 않았습니다 - 기존 동작대로 입력은 계속합니다'
+  # 경고는 연속 실패의 첫 1회만 (사용자가 다른 창을 쓰는 동안 매 클릭마다 쌓이던 문제)
+  switch (Get-RepeatWarnAction -WasWarned $script:focusWarnActive -Failed (-not $focusOk)) {
+    'warn' {
+      Write-RunLog '[경고] 게임 창 전면화를 두 번 시도했지만 실제 전면 루트 창으로 확인되지 않았습니다 - 기존 동작대로 입력은 계속합니다 (연속 실패 중에는 이 경고를 반복하지 않습니다)'
+      $script:focusWarnActive = $true
+      $script:focusWarnSuppressed = 0
+    }
+    'recover' {
+      Write-RunLog "[안내] 게임 창 전면화 확인이 정상으로 돌아왔습니다 (그 사이 확인 실패 $($script:focusWarnSuppressed)회는 기록을 생략했습니다)"
+      $script:focusWarnActive = $false
+      $script:focusWarnSuppressed = 0
+    }
+    default { if (-not $focusOk) { $script:focusWarnSuppressed++ } }
+  }
 }
 
 function Get-ScaledScreenPoint {
@@ -1393,8 +1511,19 @@ function Click-ScreenPoint {
       break
     }
   }
-  if (-not $cursorReady) {
-    Write-RunLog "[경고] 커서를 목표 위치(${X},${Y})로 두 번 이동했지만 실제 위치를 확인하지 못했습니다 - 기존 동작대로 클릭을 계속합니다"
+  # 경고는 연속 실패의 첫 1회만 (전면화 확인과 같은 억제 규칙 - Get-RepeatWarnAction)
+  switch (Get-RepeatWarnAction -WasWarned $script:cursorWarnActive -Failed (-not $cursorReady)) {
+    'warn' {
+      Write-RunLog "[경고] 커서를 목표 위치(${X},${Y})로 두 번 이동했지만 실제 위치를 확인하지 못했습니다 - 기존 동작대로 클릭을 계속합니다 (연속 실패 중에는 이 경고를 반복하지 않습니다)"
+      $script:cursorWarnActive = $true
+      $script:cursorWarnSuppressed = 0
+    }
+    'recover' {
+      Write-RunLog "[안내] 커서 위치 확인이 정상으로 돌아왔습니다 (그 사이 확인 실패 $($script:cursorWarnSuppressed)회는 기록을 생략했습니다)"
+      $script:cursorWarnActive = $false
+      $script:cursorWarnSuppressed = 0
+    }
+    default { if (-not $cursorReady) { $script:cursorWarnSuppressed++ } }
   }
   Start-Sleep -Milliseconds 250
   [HoneyNogiInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
@@ -5397,12 +5526,12 @@ try {
   }
 
   # ===== 오류 로그 사본 보관 =====
-  # 현재 로그 파일은 다음 회차가 시작되면 지워지므로, 오류 순간의 로그 전문을
+  # 현재 사용 중인 기본/복구 로그 파일은 다음 회차가 시작되면 보관되므로, 오류 순간의 로그 전문을
   # 스크린샷과 같은 이름(error_시각.log)으로 복사해 세트로 남깁니다.
   # 위의 [오류]/[진단] 줄까지 모두 기록된 뒤에 복사하도록 맨 마지막에 수행합니다.
   try {
     $diagLog = Join-Path $logDir "$diagBaseName.log"
-    Copy-Item -LiteralPath $logPath -Destination $diagLog -Force
+    Copy-Item -LiteralPath $script:runLogTargetPath -Destination $diagLog -Force
     # 좌표 버전 게이트 상태는 사용자 로그(GUI 표시)에는 보이지 않게, 오류 사본에만 직접 기록합니다
     if ($script:staleCoordsIgnored) {
       Add-Content -LiteralPath $diagLog -Encoding UTF8 -ErrorAction SilentlyContinue `
