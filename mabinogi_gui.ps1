@@ -468,6 +468,9 @@ $script:crLoading = $false           # 커스텀 리스트뷰를 프로그램적
 $script:crSwitching = $false         # 카테고리 전환에 의한 커스텀 라디오 폴백/복원 중 가드 (enabled 보존)
 $script:customEnabledWish = $false   # 커스텀 반복 '선택 의도' - 던전 외 카테고리에서 라디오가 풀려도 보존 (config enabled 와 동기)
 $script:customProgressReset = $false # 업데이트 이전(Update-ConfigToLatest)에서 진행 기록을 초기화했는지 (시작 로그 안내용)
+$script:acrLockUpdating = $false     # 어비스 커스텀 방식·매칭 잠금 적용 중 재진입 가드 (라디오 Checked 변경 → 패널 갱신 → 재호출 방지)
+$script:acrLockOn = $false           # 어비스 방식·매칭이 리스트 값으로 잠겨 있는지 (비활성 라디오 툴팁 판정용)
+$script:acrTipShownFor = $null       # 현재 툴팁을 띄워 둔 잠긴 라디오 (같은 컨트롤에서 반복 호출 → 깜박임 방지)
 
 # ============================================================
 #  UI 구성
@@ -1529,6 +1532,41 @@ $rbAcrPartyLead.Location = New-Object System.Drawing.Point(292, 2)
 $rbAcrPartyLead.Size = New-Object System.Drawing.Size(120, 22)
 $pnlAcrMatching.Controls.Add($rbAcrPartyLead)
 
+# 잠긴(비활성) 라디오 위에서도 자동부활 체크박스처럼 설명이 뜨게 합니다.
+# WinForms 는 비활성 컨트롤에 마우스 이벤트를 주지 않아 SetToolTip 이 통하지 않으므로,
+# 부모 패널의 MouseMove 로 커서가 어느 라디오 영역에 있는지 직접 판정해 띄웁니다.
+# 같은 컨트롤 위에서는 Show 를 다시 부르지 않아 깜박이지 않습니다(2026-07-22 실기 반영).
+$acrLockTipText = '리스트의 방식·매칭과 같아야 합니다. 바꾸려면 리스트를 비워 주세요.'
+$acrLockTipMove = {
+  param($tipSender, $tipArgs)
+  if (-not $script:acrLockOn) { return }
+  $tipHit = $null
+  foreach ($tipCtl in $tipSender.Controls) {
+    if ($tipCtl -is [System.Windows.Forms.RadioButton] -and (-not $tipCtl.Enabled) -and
+      $tipCtl.Bounds.Contains($tipArgs.Location)) { $tipHit = $tipCtl; break }
+  }
+  if ($tipHit) {
+    if ($script:acrTipShownFor -ne $tipHit) {
+      $script:acrTipShownFor = $tipHit
+      $toolTip.Show($acrLockTipText, $tipSender, $tipHit.Left, ($tipHit.Bottom + 2), 8000)
+    }
+  } elseif ($script:acrTipShownFor) {
+    $script:acrTipShownFor = $null
+    $toolTip.Hide($tipSender)
+  }
+}
+$acrLockTipLeave = {
+  param($tipSender, $tipArgs)
+  if ($script:acrTipShownFor) {
+    $script:acrTipShownFor = $null
+    $toolTip.Hide($tipSender)
+  }
+}
+foreach ($acrTipPanel in @($pnlAcrInput, $pnlAcrMatching)) {
+  $acrTipPanel.Add_MouseMove($acrLockTipMove)
+  $acrTipPanel.Add_MouseLeave($acrLockTipLeave)
+}
+
 $lvAcrList = New-Object System.Windows.Forms.ListView
 $lvAcrList.Location = New-Object System.Drawing.Point(15, 52)
 $lvAcrList.Size = New-Object System.Drawing.Size(420, 150)
@@ -1594,6 +1632,8 @@ $btnAcrAdd.Add_Click({
     Add-AbyssCustomListRow -Mode $acrMode -Difficulty ([string]$cboAcrDifficulty.SelectedItem) `
       -Dungeon ([string]$cboAcrDungeon.SelectedItem) -Matching $acrMatchingText
     Update-AbyssCustomListNumbers
+    # 첫 항목이 들어오면 방식·매칭 입력을 그 값으로 잠급니다 (리스트 전체 통일 규칙)
+    Update-AbyssInputLock
     if ($script:uiReady) { Save-CustomRepeatToConfig }
   })
 
@@ -1605,6 +1645,8 @@ $btnAcrDelete.Add_Click({
     }
     foreach ($acrRow in $acrCheckedRows) { $lvAcrList.Items.Remove($acrRow) }
     Update-AbyssCustomListNumbers
+    # 리스트가 비면 방식·매칭 입력을 다시 열어 줍니다
+    Update-AbyssInputLock
     if ($script:uiReady) { Save-CustomRepeatToConfig }
   })
 
@@ -2312,6 +2354,8 @@ function Move-AbyssCustomListRow {
     $row.Selected = $true
     $lvAcrList.EnsureVisible($toIndex)
   } finally { $script:crLoading = $prevLoading }
+  # 순서가 바뀌면 기준이 되는 첫 항목도 바뀔 수 있어 잠금을 다시 계산합니다
+  Update-AbyssInputLock
   if ($script:uiReady) { Save-CustomRepeatToConfig }
 }
 
@@ -2328,6 +2372,118 @@ function Get-AbyssCustomItemsFromList {
     }
   }
   return $items
+}
+
+function Get-AbyssListLock {
+  # 어비스 커스텀 리스트의 '방식·매칭 고정값'을 첫 항목에서 뽑습니다 (2026-07-22 사용자 확정:
+  # 리스트 전체가 같은 방식+매칭이어야 함 - 항목마다 다르면 파티 상태가 항목 간에 꼬임).
+  # 반환: 리스트가 비었으면 $null, 아니면 단일 해시테이블 @{ Mode; Matching }
+  #       (Mode = 'solo'/'party', Matching = 혼자하기면 '없음', 함께하기면 GUI 표기 문구).
+  # 단일 객체 반환이라 PS 5.1 배열 풀림과 무관합니다 - 호출부는 $null 검사만 하면 됩니다.
+  param($Items)
+  $alList = @()
+  foreach ($alItem in @($Items)) { if ($null -ne $alItem) { $alList += $alItem } }
+  if ($alList.Count -lt 1) { return $null }
+  $alFirst = $alList[0]
+  $alMode = $(if ([string]$alFirst.mode -eq 'party' -or [string]$alFirst.mode -eq '함께하기') { 'party' } else { 'solo' })
+  $alMatching = '없음'
+  if ($alMode -eq 'party') {
+    # config 를 직접 편집해 '파티찾기'(공백 없음)처럼 적혀 있어도 같은 값으로 보도록 공백을 지워 비교하고,
+    # 라디오에 되돌려 맞출 수 있게 GUI 표기 문구로 정규화합니다.
+    $alKey = ([string]$alFirst.matching) -replace '\s', ''
+    switch ($alKey) {
+      '파티찾기'     { $alMatching = '파티 찾기' }
+      '파티(파티장)' { $alMatching = '파티(파티장)' }
+      default        { $alMatching = '우연한 만남' }
+    }
+  }
+  return @{ Mode = $alMode; Matching = $alMatching }
+}
+
+function Get-AbyssMatchingIssues {
+  # 첫 항목과 방식·매칭이 다른 항목들을 찾아 돌려줍니다 (config 를 직접 편집해 섞인 리스트가
+  # 들어온 경우의 시작 게이트용 - GUI 에서는 라디오 잠금으로 애초에 섞이지 않습니다).
+  # 반환: 위반 배열 [{Index; Mode; Matching; Reason}] (없으면 빈 배열).
+  # PS 5.1 배열 풀림 주의: 열거용이므로 return $issues 그대로 + 호출부 @() 감싸기 규약.
+  param($Items)
+  $issues = @()
+  $amList = @()
+  foreach ($amItem in @($Items)) { if ($null -ne $amItem) { $amList += $amItem } }
+  if ($amList.Count -lt 2) { return $issues }
+  $amLock = Get-AbyssListLock -Items $amList
+  if ($null -eq $amLock) { return $issues }
+  $amLockKey = ([string]$amLock.Matching) -replace '\s', ''
+  for ($amIdx = 1; $amIdx -lt $amList.Count; $amIdx++) {
+    $amItemCur = $amList[$amIdx]
+    $amMode = $(if ([string]$amItemCur.mode -eq 'party' -or [string]$amItemCur.mode -eq '함께하기') { 'party' } else { 'solo' })
+    $amMatching = $(if ($amMode -eq 'party') { [string]$amItemCur.matching } else { '없음' })
+    $amKey = $amMatching -replace '\s', ''
+    $amModeText = $(if ($amMode -eq 'party') { '함께하기' } else { '혼자하기' })
+    $amLockModeText = $(if ($amLock.Mode -eq 'party') { '함께하기' } else { '혼자하기' })
+    $amReason = $null
+    if ($amMode -ne $amLock.Mode) {
+      $amReason = ("리스트의 방식은 '{0}'인데 이 항목은 '{1}'입니다" -f $amLockModeText, $amModeText)
+    } elseif ($amMode -eq 'party' -and $amKey -ne $amLockKey) {
+      $amReason = ("리스트의 매칭은 '{0}'인데 이 항목은 '{1}'입니다" -f [string]$amLock.Matching, $amMatching)
+    }
+    if ($amReason) {
+      $issues += [pscustomobject]@{
+        Index    = ($amIdx + 1)
+        Mode     = $amModeText
+        Matching = $amMatching
+        Reason   = $amReason
+      }
+    }
+  }
+  return $issues
+}
+
+function Update-AbyssInputLock {
+  # 어비스 커스텀 입력 줄 잠금: 리스트에 항목이 하나라도 있으면 그 리스트의 방식·매칭으로
+  # 라디오를 맞추고 비활성화합니다 (팝업 대신 애초에 못 고르게 하는 방식 - 사용자 확정).
+  # 리스트가 비면 전부 다시 활성화합니다. 항목 추가/삭제/이동/설정 복원/카테고리 전환 후 호출.
+  # 라디오 Checked 를 코드로 바꾸면 CheckedChanged → 패널 갱신 → 이 함수 재호출로 이어질 수
+  # 있어 $script:acrLockUpdating 로 재진입을 막습니다.
+  if ($script:acrLockUpdating) { return }
+  $script:acrLockUpdating = $true
+  try {
+    $acrLock = Get-AbyssListLock -Items @(Get-AbyssCustomItemsFromList)
+    $acrLockOn = ($null -ne $acrLock)
+    $prevLoading = $script:crLoading
+    $script:crLoading = $true
+    try {
+      if ($acrLockOn) {
+        if ($acrLock.Mode -eq 'party') {
+          if (-not $rbAcrParty.Checked) { $rbAcrParty.Checked = $true }
+          if ($acrLock.Matching -eq '파티 찾기') {
+            if (-not $rbAcrFindParty.Checked) { $rbAcrFindParty.Checked = $true }
+          } elseif ($acrLock.Matching -eq '파티(파티장)') {
+            if (-not $rbAcrPartyLead.Checked) { $rbAcrPartyLead.Checked = $true }
+          } else {
+            if (-not $rbAcrChance.Checked) { $rbAcrChance.Checked = $true }
+          }
+        } else {
+          if (-not $rbAcrSolo.Checked) { $rbAcrSolo.Checked = $true }
+        }
+      }
+      $rbAcrSolo.Enabled = -not $acrLockOn
+      $rbAcrParty.Enabled = -not $acrLockOn
+      $rbAcrChance.Enabled = -not $acrLockOn
+      $rbAcrFindParty.Enabled = -not $acrLockOn
+      $rbAcrPartyLead.Enabled = -not $acrLockOn
+    } finally { $script:crLoading = $prevLoading }
+    # 잠긴 이유 안내: 항상 보이는 라벨이 주 수단입니다.
+    # (툴팁은 비활성 컨트롤에 안 뜨는 WinForms 특성 때문에 라디오+패널에 겹쳐 걸었더니
+    #  마우스가 둘 사이를 오갈 때 깜박였음 - 2026-07-22 실기 확인 → 패널에만 남깁니다)
+    # 툴팁은 아래 MouseMove 핸들러가 잠긴 라디오 위에서만 직접 띄웁니다
+    # (비활성 컨트롤은 마우스 이벤트를 받지 못해 SetToolTip 이 동작하지 않는 WinForms 특성)
+    $script:acrLockOn = $acrLockOn
+    if (-not $acrLockOn -and $script:acrTipShownFor) {
+      $script:acrTipShownFor = $null
+      $toolTip.Hide($pnlAcrInput)
+      $toolTip.Hide($pnlAcrMatching)
+    }
+  } finally { $script:acrLockUpdating = $false }
 }
 
 function Set-CustomRepeatOnConfig {
@@ -2640,6 +2796,8 @@ function Load-SettingsToUi {
         try { $numAcrLaps.Value = [Math]::Min(999, [Math]::Max(1, [int]$acr.listRepeatCount)) } catch { $numAcrLaps.Value = 1 }
         $numAcrLaps.Enabled = $rbAcrCount.Checked
       } finally { $script:crLoading = $false }
+      # 복원된 리스트 기준으로 방식·매칭 입력 잠금을 맞춥니다 (통일 규칙)
+      Update-AbyssInputLock
     }
   } catch { $script:crLoading = $false }
   # 저장된 난이도 복원 (없거나 빈 값이면 '게임 그대로'. 목록에 없는 이름이 저장돼
@@ -3264,6 +3422,21 @@ $btnStart.Add_Click({
       if ($script:customConfigSection -eq 'customRepeat') {
         $crGateIssues = @(Get-CustomTransitionIssues -Items $crItems -ListRepeat $crGateRepeat -ListRepeatCount $crGateLaps)
       }
+      # 어비스 방식·매칭 통일 게이트: GUI 에서는 라디오 잠금으로 섞일 수 없지만 config 를 직접
+      # 편집하면 섞인 리스트가 들어올 수 있어 시작을 거부하고 어떤 항목이 다른지 로그로 알립니다
+      # (무인 운용 보호 - 팝업 없이 로그만).
+      if ($script:customConfigSection -eq 'abyssCustomRepeat') {
+        $acrGateIssues = @(Get-AbyssMatchingIssues -Items $crItems)
+        if ($acrGateIssues.Count -gt 0) {
+          Add-GuiLog '[경고] 어비스 커스텀 반복: 리스트의 방식·매칭이 서로 달라 시작할 수 없습니다 - 리스트 전체가 같은 방식·매칭이어야 합니다.'
+          foreach ($acrGateIssue in $acrGateIssues) {
+            Add-GuiLog ('[경고] {0}번({1} 매칭 ''{2}''): {3}' -f $acrGateIssue.Index, $acrGateIssue.Mode, $acrGateIssue.Matching, $acrGateIssue.Reason)
+          }
+          Add-GuiLog '[안내] 리스트를 비우고 원하는 방식·매칭으로 다시 추가해 주세요.'
+          $script:customActive = $false
+          return
+        }
+      }
       if ($crGateIssues.Count -gt 0) {
         Add-GuiLog '[경고] 커스텀 반복: 게임에서 불가능한 층 전환이 리스트에 있어 시작할 수 없습니다 - 아래 항목의 순서를 조정해 주세요.'
         # 팝업 안내 (2026-07-20 사용자 확정): 시작 버튼 클릭 즉답 팝업 - 팝업 금지 규칙의
@@ -3625,6 +3798,9 @@ $updateCategoryPanels = {
   $logHeight = $btnOpenLog.Top - $txtLog.Top - 8
   if ($logHeight -lt 100) { $logHeight = 100 }
   $txtLog.Height = $logHeight
+  # 어비스 커스텀 방식·매칭 입력 잠금 재적용 (여기서 라디오가 바뀌면 CheckedChanged 로 이 블록이
+  # 한 번 더 돌아 배치가 다시 맞춰집니다 - 잠금 함수 쪽 재진입 가드로 무한 재귀는 없습니다)
+  Update-AbyssInputLock
 }
 $rbCatAbyss.Add_CheckedChanged($updateCategoryPanels)
 $rbCatDungeon.Add_CheckedChanged($updateCategoryPanels)
